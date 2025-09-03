@@ -1,125 +1,150 @@
-import os
-import time
-import base64
-import asyncio
-import numpy as np
-from io import BytesIO
-from backend.routers import auth, user_profile
+from kivy.app import App
+from kivy.lang import Builder
+from kivy.core.window import Window
+from kivy.uix.screenmanager import Screen, ScreenManager
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastrtc import Stream, AsyncAudioVideoStreamHandler, wait_for_item
-import google.genai as genai
-from PIL import Image
+Window.clearcolor = (0.07, 0.07, 0.08, 1)  # dark background
+Window.size = (1280, 720)
 
-from dotenv import load_dotenv
-load_dotenv()
+KV = """
+RootWidget:
+    AuthScreen:
+    MainScreen:
 
-app = FastAPI()
-app.include_router(auth.router)
-app.include_router(user_profile.router)
+<AuthScreen>:
+    name: "auth"
+    BoxLayout:
+        orientation: "vertical"
+        padding: "20dp"
+        spacing: "16dp"
 
-# Allow CORS for your frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+        # Camera preview on top
+        Widget:
+            size_hint_y: 0.8
+            canvas.before:
+                Color:
+                    rgba: (0.2,0.2,0.25,1)
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [16,]
 
-# ---------- Helpers ----------
-def encode_audio(data: np.ndarray) -> dict:
-    return {
-        "mime_type": "audio/pcm",
-        "data": base64.b64encode(data.tobytes()).decode("UTF-8"),
-    }
+        # Username input (only in registration)
+        TextInput:
+            id: username_input
+            hint_text: "Username"
+            size_hint_y: None
+            height: "40dp"
+            opacity: 1 if root.mode=='register' else 0
+            disabled: False if root.mode=='register' else True
 
-def encode_image(frame: np.ndarray) -> dict:
-    with BytesIO() as output_bytes:
-        pil_image = Image.fromarray(frame)
-        pil_image.save(output_bytes, "JPEG")
-        bytes_data = output_bytes.getvalue()
-    return {
-        "mime_type": "image/jpeg",
-        "data": base64.b64encode(bytes_data).decode("utf-8")
-    }
+        # Full Name input (only in registration)
+        TextInput:
+            id: fullname_input
+            hint_text: "Full Name"
+            size_hint_y: None
+            height: "40dp"
+            opacity: 1 if root.mode=='register' else 0
+            disabled: False if root.mode=='register' else True
 
-# ---------- Gemini Handler ----------
-class GeminiHandler(AsyncAudioVideoStreamHandler):
-    def __init__(self) -> None:
-        super().__init__("mono", output_sample_rate=24000, input_sample_rate=16000)
-        self.audio_queue = asyncio.Queue()
-        self.video_queue = asyncio.Queue()
-        self.session = None
-        self.last_frame_time = 0
-        self.quit = asyncio.Event()
+        # Action button
+        Button:
+            id: action_button
+            text: root.action_text
+            size_hint_y: None
+            height: "48dp"
+            on_release: app.root.current = "main"
 
-    def copy(self):
-        return GeminiHandler()
+        # Toggle Login/Register
+        Button:
+            text: root.switch_text
+            size_hint_y: None
+            height: "40dp"
+            on_release: root.toggle_mode()
 
-    async def start_up(self):
-        client = genai.Client(
-            api_key=os.getenv("GEMINI_API_KEY"),
-            http_options={"api_version": "v1alpha"}
-        )
-        config = {"response_modalities": ["AUDIO"]}
-        async with client.aio.live.connect(
-            model="gemini-2.0-flash-exp",
-            config=config
-        ) as session:
-            self.session = session
-            while not self.quit.is_set():
-                turn = self.session.receive()
-                try:
-                    async for response in turn:
-                        if data := response.data:
-                            audio = np.frombuffer(data, dtype=np.int16).reshape(1, -1)
-                            self.audio_queue.put_nowait(audio)
-                except Exception:
-                    break
+<MainScreen>:
+    name: "main"
+    BoxLayout:
+        orientation: "horizontal"
+        spacing: "16dp"
+        padding: "20dp"
 
-    async def video_receive(self, frame: np.ndarray):
-        """Receive video frames from client and send to Gemini every 1s"""
-        self.video_queue.put_nowait(frame)
-        if self.session and (time.time() - self.last_frame_time) > 1:
-            self.last_frame_time = time.time()
-            await self.session.send(input=encode_image(frame))
+        # Left side - events
+        RecycleView:
+            id: events
+            viewclass: "EventRow"
+            bar_width: 0
+            RecycleBoxLayout:
+                default_size: None, dp(48)
+                default_size_hint: 1, None
+                size_hint_y: None
+                height: self.minimum_height
+                orientation: "vertical"
 
-    async def video_emit(self):
-        """Emit last received frame or placeholder"""
-        frame = await wait_for_item(self.video_queue, 0.01)
-        if frame is not None:
-            return frame
-        else:
-            return np.zeros((100, 100, 3), dtype=np.uint8)
+        # Right side - camera for live streaming
+        Widget:
+            id: camera_widget
+            size_hint_y: None
+            height: self.width
+            canvas.before:
+                Color:
+                    rgba: (0.2, 0.2, 0.25, 1)
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [16,]
 
-    async def receive(self, frame: tuple[int, np.ndarray]) -> None:
-        """Receive audio from client and send to Gemini"""
-        _, array = frame
-        array = array.squeeze()
-        if self.session:
-            await self.session.send(input=encode_audio(array))
+<EventRow@BoxLayout>:
+    size_hint_y: None
+    height: "48dp"
+    padding: "8dp"
+    spacing: "12dp"
+    canvas.before:
+        Color:
+            rgba: (0.11, 0.11, 0.13, 1)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [12,]
+    Label:
+        text: root.date
+        color: (0.7,0.7,0.7,1)
+        font_size: "14sp"
+    Label:
+        text: root.title
+        color: (1,1,1,1)
+        font_size: "16sp"
+        bold: True
+"""
 
-    async def emit(self):
-        """Emit audio from Gemini to client"""
-        array = await wait_for_item(self.audio_queue, 0.01)
-        if array is not None:
-            return (self.output_sample_rate, array)
-        return array
+class AuthScreen(Screen):
+    mode = "login"  # 'login' or 'register'
 
-    async def shutdown(self) -> None:
-        if self.session:
-            self.quit.set()
-            await self.session.close()
-            self.quit.clear()
+    @property
+    def action_text(self):
+        return "Login" if self.mode == "login" else "Register"
 
-# ---------- Stream ----------
-stream = Stream(
-    handler=GeminiHandler(),
-    modality="audio-video",
-    mode="send-receive"
-)
-stream.mount(app)
-    
-# Run the application using uvicorn main:app --reload
+    @property
+    def switch_text(self):
+        return "Switch to Register" if self.mode == "login" else "Switch to Login"
+
+    def toggle_mode(self):
+        self.mode = "register" if self.mode == "login" else "login"
+        self.ids.username_input.opacity = 1 if self.mode=='register' else 0
+        self.ids.username_input.disabled = False if self.mode=='register' else True
+        self.ids.fullname_input.opacity = 1 if self.mode=='register' else 0
+        self.ids.fullname_input.disabled = False if self.mode=='register' else True
+        self.ids.action_button.text = self.action_text
+
+class MainScreen(Screen):
+    pass
+
+class RootWidget(ScreenManager):
+    pass
+
+class MinimalUIApp(App):
+    def build(self):
+        return Builder.load_string(KV)
+
+if __name__ == "__main__":
+    MinimalUIApp().run()
