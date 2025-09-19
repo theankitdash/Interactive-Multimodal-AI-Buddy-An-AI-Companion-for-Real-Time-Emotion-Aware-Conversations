@@ -104,10 +104,12 @@ RootWidget:
                     spacing: "8dp"
 
         # Right side - camera
-        Widget:
+        Image:
             id: camera_widget
             size_hint_y: None
             height: self.width
+            allow_stretch: True
+            keep_ratio: True
             canvas.before:
                 Color:
                     rgba: (0.15, 0.15, 0.18, 1)
