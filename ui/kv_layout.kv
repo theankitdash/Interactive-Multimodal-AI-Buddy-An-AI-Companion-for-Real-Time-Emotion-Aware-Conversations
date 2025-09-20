@@ -8,11 +8,24 @@ RootWidget:
         orientation: "vertical"
         padding: "32dp"
         spacing: "20dp"
+        canvas.before:
+            Color:
+                rgba: (0.12, 0.12, 0.15, 1)
+            Rectangle:
+                pos: self.pos
+                size: self.size
 
         # Camera preview
         Image:
             id: camera_preview
             size_hint_y: 0.6
+            canvas.before:
+                Color:
+                    rgba: (0.10, 0.10, 0.13, 1)  
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [16,]
 
         # Username input (only in registration)
         TextInput:
@@ -21,7 +34,7 @@ RootWidget:
             size_hint_y: None
             height: "44dp"
             background_normal: ""
-            background_color: (0.12,0.12,0.15,1)
+            background_color: (0.18, 0.18, 0.22, 1)
             foreground_color: (1,1,1,1)
             padding: ["12dp","10dp"]
             radius: [12,]
@@ -35,7 +48,7 @@ RootWidget:
             size_hint_y: None
             height: "44dp"
             background_normal: ""
-            background_color: (0.12,0.12,0.15,1)
+            background_color: (0.18, 0.18, 0.22, 1)
             foreground_color: (1,1,1,1)
             padding: ["12dp","10dp"]
             radius: [12,]
@@ -49,7 +62,7 @@ RootWidget:
             size_hint_y: None
             height: "48dp"
             background_normal: ""
-            background_color: (0.25,0.45,1,1)
+            background_color: (0.24, 0.49, 1, 1)
             color: (1,1,1,1)
             font_size: "16sp"
             bold: True
@@ -63,8 +76,8 @@ RootWidget:
             size_hint_y: None
             height: "44dp"
             background_normal: ""
-            background_color: (0.18,0.18,0.22,1)
-            color: (0.8,0.8,0.85,1)
+            background_color: (0.16,0.16,0.19,1)
+            color: (0.8,0.85,0.9,1)
             font_size: "14sp"
             radius: [12,]
             on_release: root.toggle_mode()
@@ -75,15 +88,22 @@ RootWidget:
         orientation: "horizontal"
         spacing: "20dp"
         padding: "24dp"
+        canvas.before:
+            Color:
+                rgba: (0.12, 0.12, 0.15, 1) 
+            Rectangle:
+                pos: self.pos
+                size: self.size
 
         # Left side - events with modern scrollbar
         ScrollView:
             id: scroll_events
+            size_hint_x: 0.4 
             bar_width: 6
             scroll_type: ['bars', 'content']
             effect_cls: "ScrollEffect"
-            bar_color: (0.3,0.5,1,0.8)  # soft blue scrollbar
-            bar_inactive_color: (0.3,0.5,1,0.3)  # faded when not moving
+            bar_color: (0.24, 0.49, 1, 0.9) 
+            bar_inactive_color: (0.3,0.5,1,0.3)  
             canvas.before:
                 Color:
                     rgba: (0,0,0,0)
@@ -106,13 +126,14 @@ RootWidget:
         # Right side - camera
         Image:
             id: camera_widget
-            size_hint_y: None
+            size_hint_x: 0.6
+            size_hint_y: 1
             height: self.width
             allow_stretch: True
             keep_ratio: True
             canvas.before:
                 Color:
-                    rgba: (0.15, 0.15, 0.18, 1)
+                    rgba: (0.16, 0.16, 0.19, 1)
                 RoundedRectangle:
                     pos: self.pos
                     size: self.size
@@ -125,14 +146,14 @@ RootWidget:
     spacing: "16dp"
     canvas.before:
         Color:
-            rgba: (0.12, 0.12, 0.15, 1)
+            rgba: (0.18, 0.18, 0.22, 1)
         RoundedRectangle:
             pos: self.pos
             size: self.size
             radius: [14,]
     Label:
         text: root.date
-        color: (0.7,0.7,0.7,1)
+        color: (0.7,0.7,0.75,1)
         font_size: "14sp"
     Label:
         text: root.title
