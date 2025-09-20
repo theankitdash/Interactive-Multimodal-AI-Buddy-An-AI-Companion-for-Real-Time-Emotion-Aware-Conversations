@@ -11,6 +11,8 @@ from PIL import Image
 
 import google.genai as genai
 from kivy.uix.screenmanager import Screen
+from kivy.uix.boxlayout import BoxLayout
+from kivy.properties import StringProperty
 from kivy.graphics.texture import Texture
 from kivy.clock import Clock
 
@@ -85,6 +87,10 @@ class GeminiHandler:
             await self.session.close()
             self.quit.clear()
 
+class EventRow(BoxLayout):
+    date = StringProperty("")   # used by KV as root.date
+    title = StringProperty("")      
+
 # ------------ Kivy MainScreen ------------
 class MainScreen(Screen):
     def __init__(self, **kwargs):
@@ -111,6 +117,9 @@ class MainScreen(Screen):
 
         # Start camera preview updater
         Clock.schedule_interval(self.update_camera_widget, 1/30)
+
+        # Load mock events
+        self.load_sample_events()
 
     async def run_agent(self):
         asyncio.create_task(self.handler.start())
@@ -171,6 +180,32 @@ class MainScreen(Screen):
                 texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
                 texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
                 self.ids.camera_widget.texture = texture
+
+    # Inject sample events when entering
+    def load_sample_events(screen):
+        sample_data = [
+            {"date": "2025-09-20", "title": "AI & Robotics Expo"},
+            {"date": "2025-09-22", "title": "Team Meeting"},
+            {"date": "2025-09-25", "title": "Client Presentation"},
+            {"date": "2025-09-28", "title": "Hackathon 2025"},
+            {"date": "2025-09-30", "title": "Salon Launch Party 🎉"},
+            {"date": "2025-09-20", "title": "AI & Robotics Expo"},
+            {"date": "2025-09-22", "title": "Team Meeting"},
+            {"date": "2025-09-25", "title": "Client Presentation"},
+            {"date": "2025-09-28", "title": "Hackathon 2025"},
+            {"date": "2025-09-30", "title": "Salon Launch Party 🎉"},
+            {"date": "2025-09-20", "title": "AI & Robotics Expo"},
+            {"date": "2025-09-22", "title": "Team Meeting"},
+            {"date": "2025-09-25", "title": "Client Presentation"},
+            {"date": "2025-09-28", "title": "Hackathon 2025"},
+            {"date": "2025-09-30", "title": "Salon Launch Party 🎉"},
+            {"date": "2025-09-20", "title": "AI & Robotics Expo"},
+            {"date": "2025-09-22", "title": "Team Meeting"},
+            {"date": "2025-09-25", "title": "Client Presentation"},
+            {"date": "2025-09-28", "title": "Hackathon 2025"},
+            {"date": "2025-09-30", "title": "Salon Launch Party 🎉"},
+        ]
+        screen.ids.events.data = sample_data                 
 
     def on_leave(self):
         """Stop everything when leaving main screen"""
