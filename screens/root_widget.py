@@ -5,5 +5,6 @@ from screens.main_screen import MainScreen
 class RootWidget(ScreenManager):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.current_user = None
         self.add_widget(AuthScreen(name="auth"))
         self.add_widget(MainScreen(name="main"))

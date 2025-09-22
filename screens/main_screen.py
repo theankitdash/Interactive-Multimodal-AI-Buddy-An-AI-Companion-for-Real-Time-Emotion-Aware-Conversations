@@ -1,4 +1,5 @@
 import os
+import re
 import cv2
 import time
 import base64
@@ -8,6 +9,8 @@ import numpy as np
 import sounddevice as sd
 from io import BytesIO
 from PIL import Image
+from utils.db_connect import connect_db
+from datetime import datetime
 
 import google.genai as genai
 from kivy.uix.screenmanager import Screen
@@ -41,16 +44,22 @@ async def wait_for_item(queue: asyncio.Queue, timeout: float):
 
 # ------------ Gemini Handler ------------
 class GeminiHandler:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, system_prompt: str = None):
         self.client = genai.Client(api_key=api_key, http_options={"api_version": "v1alpha"})
         self.session = None
         self.audio_queue = asyncio.Queue()
         self.video_queue = asyncio.Queue()
         self.quit = asyncio.Event()
         self.last_frame_time = 0
+        self.last_text = None
+        self.system_prompt = system_prompt
 
     async def start(self):
         config = {"response_modalities": ["AUDIO"]}
+
+        if self.system_prompt:
+            config["system_instruction"] = self.system_prompt
+
         async with self.client.aio.live.connect(model="gemini-2.0-flash-exp", config=config) as session:
             self.session = session
             while not self.quit.is_set():
@@ -61,9 +70,10 @@ class GeminiHandler:
                             audio = np.frombuffer(data, dtype=np.int16).reshape(1, -1)
                             await self.audio_queue.put(audio)
                         if response.text:  # optional text events
-                            print("Agent:", response.text)
+                            self.last_text = response.text
+                            print("Agent text event:", response.text)
                 except Exception as e:
-                    print("Gemini error:", e)
+                    print("Gemini error (in receive loop):", e)
                     break
 
     async def send_audio(self, array: np.ndarray):
@@ -84,11 +94,17 @@ class GeminiHandler:
     async def stop(self):
         if self.session:
             self.quit.set()
-            await self.session.close()
-            self.quit.clear()
+            try:
+                await self.session.close()
+            except Exception as e:
+                print("Error closing session:", e)
+            finally:
+                self.quit.clear()
+                self.session = None
 
+# ------------------ Event Row ------------------
 class EventRow(BoxLayout):
-    date = StringProperty("")   # used by KV as root.date
+    date = StringProperty("")   
     title = StringProperty("")      
 
 # ------------ Kivy MainScreen ------------
@@ -102,73 +118,238 @@ class MainScreen(Screen):
         self.mic_stream = None
         self.speaker = None
 
+        self.username = None
+        self.full_name = None
+        self.events = []
+        self.knowledge = []
+
+    async def load_user_data(self):
+        conn = await connect_db()
+        try:
+            # --- Load full name ---
+            row = await conn.fetchrow(
+                "SELECT name FROM user_details WHERE username=$1",
+                self.username
+            )
+            if row:
+                self.full_name = row["name"]
+
+            # --- Load events ---
+            rows = await conn.fetch(
+                "SELECT event_id, type, description, event_time, priority, status "
+                "FROM events WHERE username=$1 ORDER BY event_time ASC",
+                self.username
+            )
+            self.events = [dict(r) for r in rows]
+
+            # --- Load knowledge ---
+            rows = await conn.fetch(
+                "SELECT fact, category, importance FROM user_knowledge "
+                "WHERE username=$1 ORDER BY importance DESC",
+                self.username
+            )
+            self.knowledge = [dict(r) for r in rows]
+
+            print(f"✅ Loaded profile for {self.full_name}")
+            print(f"Events: {len(self.events)}, Knowledge: {len(self.knowledge)}")
+
+        finally:
+            await conn.close()
+
+    # ------------------ Add new event ------------------
+    async def add_event(self, description, event_time, type="other", priority=3):
+        conn = await connect_db()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO events (username, type, description, event_time, priority)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                self.username, type, description, event_time, priority
+            )
+            print(f"✅ Event added: {description} at {event_time}")
+        finally:
+            await conn.close()
+
+        self.events.append({
+            "description": description,
+            "event_time": event_time,
+            "type": type,
+            "priority": priority,
+            "status": "pending"
+        })
+        self.ids.events.data = [
+            {"date": str(e["event_time"].date()), "title": e["description"]}
+            for e in self.events
+        ]
+
+    # ------------------ Add new knowledge ------------------
+    async def add_knowledge(self, fact, category="other", importance=3):
+        conn = await connect_db()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO user_knowledge (username, fact, category, importance)
+                VALUES ($1, $2, $3, $4)
+                """,
+                self.username, fact, category, importance
+            )
+            print(f"✅ Knowledge added: {fact}")
+        finally:
+            await conn.close()
+
+        self.knowledge.insert(0, {"fact": fact, "category": category, "importance": importance})
+
+    def build_context(self, user_input: str) -> str:
+        """Dynamically build context with DB knowledge + events for Gemini."""
+        context = f"You are talking to {self.full_name}. "
+        
+        if self.knowledge:
+            top_facts = "; ".join([f"{k['fact']} (category: {k['category']})" for k in self.knowledge[:5]])
+            context += f"Some facts about them: {top_facts}. "
+
+        upcoming = [e for e in self.events if e["event_time"] > datetime.now()]
+        if upcoming:
+            upcoming_str = "; ".join(
+                [f"{e['description']} at {e['event_time'].strftime('%H:%M')}" for e in upcoming[:5]]
+            )
+            context += f"Upcoming events: {upcoming_str}. "
+
+        if user_input:
+            context += f"User said: {user_input}"
+        else:
+            context += "Session priming message."
+
+        return context  
+
+    # ------------------ Handle Gemini commands ------------------
+    async def handle_gemini_command(self, text):
+        text = text.lower()
+        if "remind me to" in text:
+            m = re.search(r"remind me to (.+) at (\d{1,2}:\d{2})", text)
+            if m:
+                desc = m.group(1)
+                time_str = m.group(2)
+                now = datetime.now()
+                event_time = datetime.strptime(f"{now.date()} {time_str}", "%Y-%m-%d %H:%M")
+                await self.add_event(desc, event_time, type="reminder")
+        elif "remember that" in text:
+            fact = text.split("remember that", 1)[1].strip()
+            if fact:
+                await self.add_knowledge(fact)       
+
     def on_pre_enter(self):
         """Start streaming when entering main screen"""
-        self.handler = GeminiHandler(api_key=os.getenv("GEMINI_API_KEY"))
 
-        # Background asyncio loop
-        def run_loop():
+        self.username = self.manager.current_user
+        # Create event loop + background thread once (use this loop everywhere)
+        if not self.loop:
             self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            self.loop.run_until_complete(self.run_agent())
+            def _run_loop(loop):
+                asyncio.set_event_loop(loop)
+                loop.run_forever()
+            self.loop_thread = threading.Thread(target=_run_loop, args=(self.loop,), daemon=True)
+            self.loop_thread.start()
 
-        self.thread = threading.Thread(target=run_loop, daemon=True)
-        self.thread.start()
+        future = asyncio.run_coroutine_threadsafe(self.load_user_data(), self.loop)
+        future.result() 
+
+        # Update events in Kivy UI
+        self.ids.events.data = [
+            {"date": str(e["event_time"].date()), "title": e["description"]}
+            for e in self.events
+        ]
+
+        system_prompt = f"You are a personalized assistant for {self.full_name}."
+        self.handler = GeminiHandler(api_key=os.getenv("GEMINI_API_KEY"), system_prompt=system_prompt)
+
+        # Start the agent on the background loop (do NOT create another loop)
+        asyncio.run_coroutine_threadsafe(self.run_agent(), self.loop)
 
         # Start camera preview updater
         Clock.schedule_interval(self.update_camera_widget, 1/30)
 
-        # Load mock events
-        self.load_sample_events()
-
+    # ------------------ Start Gemini in background ------------------
     async def run_agent(self):
-        asyncio.create_task(self.handler.start())
+        # start the handler (this opens/blocks on the live session in handler.start())
+        # run it as a background task inside the same loop
+        handler_task = asyncio.create_task(self.handler.start())
 
-        # Microphone -> Gemini
-        def mic_callback(indata, frames, time_, status):
-            if status:
-                print("Mic:", status)
-            array = (indata * 32767).astype(np.int16)
-            asyncio.run_coroutine_threadsafe(self.handler.send_audio(array), self.loop)
+        # wait until session is available (handler.start sets session when connected)
+        max_wait = 10.0
+        waited = 0.0
+        while not self.handler.session and waited < max_wait:
+            await asyncio.sleep(0.1)
+            waited += 0.1
 
-        self.mic_stream = sd.InputStream(channels=1, samplerate=16000, blocksize=512, callback=mic_callback)
+        if not self.handler.session:
+            print("Failed to establish Gemini session within timeout.")
+            return
+
+        # Send initial context primer so model is grounded
+        primer = self.build_context("")  # empty user_input for initial primer
+        try:
+            await self.handler.session.send(input=primer)
+        except Exception as e:
+            print("Error sending primer to session:", e)
+
+        # Start camera/mic/speaker
+        self.cap = cv2.VideoCapture(0)
+        self.mic_stream = sd.InputStream(channels=1, samplerate=16000, blocksize=512, callback=self.mic_callback)
         self.mic_stream.start()
-
-        # Speaker (Gemini -> User)
         self.speaker = sd.OutputStream(channels=1, samplerate=24000, blocksize=512)
         self.speaker.start()
 
-        # Camera
-        self.cap = cv2.VideoCapture(0)
-
+        # Main loop: read audio replies, detect model text events to handle commands
         try:
             while not self.handler.quit.is_set():
-                ret, frame = self.cap.read()
-                if ret:
-                    await self.handler.send_video(frame)
+                # Send video frames periodically
+                if self.cap and self.cap.isOpened():
+                    ret, frame = self.cap.read()
+                    if ret:
+                        # optionally send frames (throttled in handler)
+                        asyncio.create_task(self.handler.send_video(frame))
 
-                # Play audio replies
+                # Play audio replies from Gemini
                 reply = await self.handler.get_audio_reply()
                 if reply:
                     _, audio_np = reply
                     audio_np = audio_np.astype(np.float32) / 32767.0
-
-                    # Ensure it's mono (N,1)
-                    if audio_np.ndim == 1:  
-                        audio_np = audio_np[:, np.newaxis]  # shape (N,1)
+                    if audio_np.ndim == 1:
+                        audio_np = audio_np[:, np.newaxis]
                     elif audio_np.ndim == 2 and audio_np.shape[0] == 1:
-                        audio_np = audio_np.T  # convert (1,N) → (N,1)
+                        audio_np = audio_np.T
                     elif audio_np.ndim == 2 and audio_np.shape[1] > 1:
-                        # stereo → take left channel
                         audio_np = audio_np[:, 0:1]
-
+                    # write may block, consider try/except in production
                     self.speaker.write(audio_np)
+
+                # If model produced textual event(s), react to them (e.g., add reminders/knowledge).
+                # IMPORTANT: we do NOT send the model's own text back into the session (that causes loops).
+                if self.handler.last_text:
+                    # make a local copy then clear to avoid re-processing same text
+                    text_event = self.handler.last_text
+                    self.handler.last_text = None
+                    # handle DB-affecting commands like "remember that" / "remind me to"
+                    await self.handle_gemini_command(text_event)
 
                 await asyncio.sleep(0.01)
         finally:
-            if self.cap: self.cap.release()
-            if self.mic_stream: self.mic_stream.stop()
-            if self.speaker: self.speaker.stop()
+            # cleanup
+            try:
+                await self.handler.stop()
+            except Exception:
+                pass
+
+    def mic_callback(self, indata, frames, time_, status):
+        if status:
+            print("Mic:", status)
+        array = (indata * 32767).astype(np.int16)
+        if self.loop and self.handler:
+            try:
+                asyncio.run_coroutine_threadsafe(self.handler.send_audio(array), self.loop)
+            except Exception as e:
+                print("Failed to submit audio send:", e)
 
     def update_camera_widget(self, dt):
         """Update camera_widget canvas with live feed"""
@@ -179,39 +360,16 @@ class MainScreen(Screen):
                 buf = frame.tobytes()
                 texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
                 texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
-                self.ids.camera_widget.texture = texture
-
-    # Inject sample events when entering
-    def load_sample_events(screen):
-        sample_data = [
-            {"date": "2025-09-20", "title": "AI & Robotics Expo"},
-            {"date": "2025-09-22", "title": "Team Meeting"},
-            {"date": "2025-09-25", "title": "Client Presentation"},
-            {"date": "2025-09-28", "title": "Hackathon 2025"},
-            {"date": "2025-09-30", "title": "Salon Launch Party 🎉"},
-            {"date": "2025-09-20", "title": "AI & Robotics Expo"},
-            {"date": "2025-09-22", "title": "Team Meeting"},
-            {"date": "2025-09-25", "title": "Client Presentation"},
-            {"date": "2025-09-28", "title": "Hackathon 2025"},
-            {"date": "2025-09-30", "title": "Salon Launch Party 🎉"},
-            {"date": "2025-09-20", "title": "AI & Robotics Expo"},
-            {"date": "2025-09-22", "title": "Team Meeting"},
-            {"date": "2025-09-25", "title": "Client Presentation"},
-            {"date": "2025-09-28", "title": "Hackathon 2025"},
-            {"date": "2025-09-30", "title": "Salon Launch Party 🎉"},
-            {"date": "2025-09-20", "title": "AI & Robotics Expo"},
-            {"date": "2025-09-22", "title": "Team Meeting"},
-            {"date": "2025-09-25", "title": "Client Presentation"},
-            {"date": "2025-09-28", "title": "Hackathon 2025"},
-            {"date": "2025-09-30", "title": "Salon Launch Party 🎉"},
-        ]
-        screen.ids.events.data = sample_data                 
+                self.ids.camera_widget.texture = texture               
 
     def on_leave(self):
         """Stop everything when leaving main screen"""
         if self.handler:
             asyncio.run_coroutine_threadsafe(self.handler.stop(), self.loop)
-        if self.cap: self.cap.release()
-        if self.mic_stream: self.mic_stream.stop()
-        if self.speaker: self.speaker.stop()
+        if self.cap: 
+            self.cap.release()
+        if self.mic_stream: 
+            self.mic_stream.stop()
+        if self.speaker: 
+            self.speaker.stop()
         Clock.unschedule(self.update_camera_widget)

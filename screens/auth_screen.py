@@ -108,6 +108,7 @@ class AuthScreen(Screen):
                 username, fullname, face_embedding
             )
             print(f"✅ Registered {username}")
+            self.manager.current_user = username
             self.manager.current = "main"
         finally:
             await conn.close()
@@ -146,6 +147,7 @@ class AuthScreen(Screen):
 
             if best_score > 0.75:  # ✅ threshold
                 print(f"✅ Recognized as {best_user} (similarity={best_score:.3f})")
+                self.manager.current_user = best_user
                 self.manager.current = "main"
             else:
                 print("❌ Face not recognized.")
