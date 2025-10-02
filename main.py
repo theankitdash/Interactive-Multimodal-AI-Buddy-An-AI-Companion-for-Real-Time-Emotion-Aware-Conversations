@@ -1,4 +1,5 @@
 from kivy.app import App
+from kivy.animation import Animation
 from kivy.lang import Builder
 from kivy.uix.screenmanager import Screen
 from kivy.graphics.texture import Texture
@@ -35,6 +36,22 @@ class RootWidget(Screen):
         # Start camera preview immediately
         Clock.schedule_interval(self.update_camera_widget, 1/30)
         self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+
+    # --- NEW helper for showing temporary status ---
+    def show_status(self, message, duration=5, fade=True):
+        self.ids.status_label.text = message
+        self.ids.status_label.opacity = 1  # make sure visible
+
+        # Schedule removal
+        def clear_text(dt):
+            if fade:
+                anim = Animation(opacity=0, duration=1)
+                anim.bind(on_complete=lambda *args: setattr(self.ids.status_label, 'text', ""))
+                anim.start(self.ids.status_label)
+            else:
+                self.ids.status_label.text = ""
+
+        Clock.schedule_once(clear_text, duration)    
 
     # ---------------- AUTH ----------------
     def toggle_mode(self):
@@ -76,12 +93,12 @@ class RootWidget(Screen):
         username = self.ids.username_input.text.strip()
         fullname = self.ids.fullname_input.text.strip()
         if not username or not fullname:
-            self.ids.status_label.text = "❌ Missing fields"
+            self.show_status("Missing fields")
             return
 
         face_embedding = await self.capture_face_embedding()
         if not face_embedding:
-            self.ids.status_label.text = "❌ Could not capture face. Try again."
+            self.show_status("Could not capture face. Try again.")
             return
 
         conn = await connect_db()
@@ -97,40 +114,40 @@ class RootWidget(Screen):
 
         self.current_user = username
         self.mode = "assistant"
-        self.ids.status_label.text = f"✅ Registered {username}, ready!"
+        self.show_status(f"Registered {username}, ready!")
         self.start_assistant()
 
     async def login_user(self):
         conn = await connect_db()
         try:
-            rows = await conn.fetch("SELECT username, face_embedding FROM user_details WHERE face_embedding IS NOT NULL")
+            rows = await conn.fetch("SELECT name, face_embedding FROM user_details WHERE face_embedding IS NOT NULL")
             if not rows:
-                self.ids.status_label.text = "❌ No registered users"
+                self.show_status("No registered users")
                 return
 
             face_embedding = await self.capture_face_embedding()
             if not face_embedding:
-                self.ids.status_label.text = "❌ No face detected. Try again."
+                self.show_status("No face detected. Try again.")
                 return
 
             # Cosine similarity
             def cos_sim(a, b):
                 return float(np.dot(a, b.T) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
-            best_user, best_score = None, -1
+            best_name, best_score = None, -1
             for row in rows:
                 ref_emb = np.array(row["face_embedding"])
                 score = cos_sim(face_embedding, ref_emb)
                 if score > best_score:
-                    best_user, best_score = row["username"], score
+                    best_name, best_score = row["name"], score
 
             if best_score > 0.75:
-                self.current_user = best_user
+                self.current_user = best_name
                 self.mode = "assistant"
-                self.ids.status_label.text = f"✅ Welcome back {best_user}!"
+                self.show_status(f"Welcome back {best_name}!")
                 self.start_assistant()
             else:
-                self.ids.status_label.text = "❌ Face not recognized"
+                self.show_status("Face not recognized! Try again.")
 
         finally:
             await conn.close()
@@ -143,7 +160,7 @@ class RootWidget(Screen):
 
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            self.ids.status_label.text = "❌ Missing GEMINI_API_KEY"
+            self.show_status("Missing GEMINI_API_KEY!")
             return
 
         self.handler = GeminiHandler(api_key=api_key, username=self.current_user)
@@ -211,12 +228,28 @@ class RootWidget(Screen):
 
     def stop_assistant(self):
         """Stop Gemini & release resources"""
-        if self.handler:
+        if self.handler and self.loop:
             asyncio.run_coroutine_threadsafe(self.handler.stop(), self.loop)
             self.handler = None
 
-        if self.mic_stream: self.mic_stream.stop()
-        if self.speaker: self.speaker.stop()
+            # stop event loop safely
+            if self.loop.is_running():
+                self.loop.call_soon_threadsafe(self.loop.stop)
+            self.loop = None
+
+        if self.mic_stream:
+            self.mic_stream.stop()
+            self.mic_stream.close()
+            self.mic_stream = None
+
+        if self.speaker:
+            self.speaker.stop()
+            self.speaker.close()
+            self.speaker = None
+
+        if self.cap:
+            self.cap.release()
+            self.cap = None
 
         Clock.unschedule(self.update_camera_widget)
 
@@ -225,6 +258,10 @@ class MultiModalBuddy(App):
     def build(self):
         Builder.load_file("ui/kv_layout.kv")
         return RootWidget()
+
+    def on_stop(self):
+        if self.root:
+            self.root.stop_assistant()    
 
 if __name__ == "__main__":
     MultiModalBuddy().run()
