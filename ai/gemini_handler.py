@@ -32,15 +32,21 @@ async def wait_for_item(queue: asyncio.Queue, timeout: float):
 
 # ------------ Gemini Handler ------------
 class GeminiHandler:
-    def __init__(self, api_key: str, username: str = None):
+    def __init__(self, api_key: str):
         self.client = genai.Client(api_key=api_key, http_options={"api_version": "v1alpha"})
         self.session = None
         self.audio_queue = asyncio.Queue()
         self.video_queue = asyncio.Queue()
         self.quit = asyncio.Event()
         self.last_frame_time = 0
-        self.username = username
 
+        # NEW: external memory handler (LangChain)
+        self.memory = None
+
+    def attach_memory(self, langchain_handler):
+        """Attach a LangChain handler for long-term memory"""
+        self.memory = langchain_handler    
+    
     async def start(self):
         config = {"response_modalities": ["AUDIO"]}
         async with self.client.aio.live.connect(model="gemini-2.0-flash-exp", config=config) as session:
@@ -52,11 +58,14 @@ class GeminiHandler:
                         if data := response.data:
                             audio = np.frombuffer(data, dtype=np.int16).reshape(1, -1)
                             await self.audio_queue.put(audio)
-                        if response.text:  # optional text events
-                            print(f"[Gemini {self.username or 'guest'}]: {response.text}")
+                        if response.text: 
+                            print(f"{response.text}")
+                             # Store Gemini’s reply into memory
+                            if self.memory:
+                                await self.memory.update_conversation("assistant", response.text)
                 except Exception as e:
                     print("Gemini error:", e)
-                    break
+                    break           
 
     async def send_audio(self, array: np.ndarray):
         if self.session:

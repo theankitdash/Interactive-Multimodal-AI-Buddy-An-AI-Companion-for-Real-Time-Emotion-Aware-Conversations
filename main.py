@@ -13,7 +13,11 @@ import threading
 import sounddevice as sd
 from utils.face_utils import get_embedding, mtcnn
 from utils.db_connect import connect_db
-from ai.gemini import GeminiHandler
+from ai.gemini_handler import GeminiHandler
+from ai.langchain_handler import LangchainHandler
+
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 class RootWidget(Screen):
     mode = StringProperty("login")  # login / register / assistant
@@ -29,6 +33,7 @@ class RootWidget(Screen):
         self.cap = None
         self.mic_stream = None
         self.speaker = None
+        self.langchain_handler = None
 
         # Queue for capturing frames for face recognition
         self.face_queue = asyncio.Queue()
@@ -115,6 +120,7 @@ class RootWidget(Screen):
         self.current_user = username
         self.mode = "assistant"
         self.show_status(f"Registered {username}, ready!")
+        self.langchain_handler = LangchainHandler(username=self.current_user, NVIDIA_API_KEY=NVIDIA_API_KEY)
         self.start_assistant()
 
     async def login_user(self):
@@ -145,6 +151,7 @@ class RootWidget(Screen):
                 self.current_user = best_name
                 self.mode = "assistant"
                 self.show_status(f"Welcome back {best_name}!")
+                self.langchain_handler = LangchainHandler(username=self.current_user, NVIDIA_API_KEY=NVIDIA_API_KEY)
                 self.start_assistant()
             else:
                 self.show_status("Face not recognized! Try again.")
@@ -158,12 +165,12 @@ class RootWidget(Screen):
         if self.handler:
             return  # already running
 
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
+        if not GEMINI_API_KEY:
             self.show_status("Missing GEMINI_API_KEY!")
             return
 
-        self.handler = GeminiHandler(api_key=api_key, username=self.current_user)
+        self.handler = GeminiHandler(api_key=GEMINI_API_KEY)
+        self.handler.attach_memory(self.langchain_handler)
 
         def run_loop():
             self.loop = asyncio.new_event_loop()
@@ -228,6 +235,11 @@ class RootWidget(Screen):
 
     def stop_assistant(self):
         """Stop Gemini & release resources"""
+
+        if self.langchain_handler:
+            asyncio.run_coroutine_threadsafe(self.langchain_handler.stop(), self.loop)
+            self.langchain_handler = None  
+
         if self.handler and self.loop:
             asyncio.run_coroutine_threadsafe(self.handler.stop(), self.loop)
             self.handler = None
