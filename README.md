@@ -25,7 +25,8 @@ The **Interactive Multimodal AI Buddy** is an advanced AI companion designed to 
 - **Python UI Framework**: Kivy
 - **Facial Detection**: OpenCV, Facenet-PyTorch
 - **LLM Agent**: Gemini 2.0 Flash
-- **Database**: PostgreSQL
+- **LLM Framework**: Langchain (For Personalisation)
+- **Database**: PostgreSQL, Chroma (Vector DB)
 
 ---
 
