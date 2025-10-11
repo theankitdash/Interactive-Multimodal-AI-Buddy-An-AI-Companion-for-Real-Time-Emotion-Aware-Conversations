@@ -6,7 +6,7 @@
 
 ## 🚀 Overview
 
-The **Interactive Multimodal AI Buddy** is an advanced AI companion designed to engage users in real-time, emotionally intelligent conversations. By integrating multimodal inputs—such as text, voice, and facial expressions—this system adapts its responses based on the user's emotional state, fostering more natural and empathetic interactions.
+The **Interactive Multimodal AI Buddy** is an advanced AI companion designed to engage users in real-time, emotionally intelligent conversations. By integrating multimodal inputs—such as voice, and facial expressions—this system adapts its responses based on the user's emotional state, fostering more natural and empathetic interactions.
 
 ---
 
