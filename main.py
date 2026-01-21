@@ -3,7 +3,7 @@ from kivy.animation import Animation
 from kivy.lang import Builder
 from kivy.uix.screenmanager import Screen
 from kivy.graphics.texture import Texture
-from kivy.properties import StringProperty
+from kivy.properties import StringProperty, BooleanProperty
 from kivy.clock import Clock
 import os
 import cv2
@@ -21,6 +21,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 class RootWidget(Screen):
     mode = StringProperty("login")  # login / register / assistant
+    ai_state = StringProperty("listening")  # listening / thinking / speaking
+    is_muted = BooleanProperty(False)
+    is_camera_on = BooleanProperty(True)
+    user_initials = StringProperty("")
     current_user = None
 
     def __init__(self, **kwargs):
@@ -56,7 +60,86 @@ class RootWidget(Screen):
             else:
                 self.ids.status_label.text = ""
 
-        Clock.schedule_once(clear_text, duration)    
+        Clock.schedule_once(clear_text, duration)
+    
+    # --- UI State Management ---
+    def get_initials(self, name):
+        """Extract 2-letter initials from user name"""
+        if not name:
+            return "??"
+        words = name.strip().split()
+        if len(words) >= 2:
+            return (words[0][0] + words[-1][0]).upper()
+        elif len(words) == 1:
+            return words[0][:2].upper()
+        return "??"
+    
+    def get_state_color(self):
+        """Return RGBA color based on AI state"""
+        colors = {
+            "listening": (0.388, 0.4, 0.945, 1),    # #6366f1 blue
+            "thinking": (0.961, 0.62, 0.043, 1),    # #f59e0b amber
+            "speaking": (0.063, 0.725, 0.506, 1),   # #10b981 green
+        }
+        return colors.get(self.ai_state, colors["listening"])
+    
+    def cycle_ai_state(self):
+        """Cycle through AI states for demo/testing"""
+        states = ["listening", "thinking", "speaking"]
+        current_index = states.index(self.ai_state)
+        self.ai_state = states[(current_index + 1) % len(states)]
+        self.start_pulse_animation()
+    
+    def toggle_mute(self):
+        """Toggle audio mute state"""
+        self.is_muted = not self.is_muted
+        # TODO: Connect to actual audio stream muting
+        print(f"Audio muted: {self.is_muted}")
+    
+    def toggle_camera(self):
+        """Toggle camera on/off"""
+        self.is_camera_on = not self.is_camera_on
+        if not self.is_camera_on and self.cap:
+            # Stop camera
+            self.cap.release()
+            self.cap = None
+        elif self.is_camera_on and not self.cap:
+            # Restart camera
+            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    
+    def handle_logout(self):
+        """Handle logout button click"""
+        self.stop_assistant()
+        self.current_user = None
+        self.user_initials = ""
+        self.mode = "login"
+        self.ai_state = "listening"
+        self.is_muted = False
+        if not self.is_camera_on:
+            self.is_camera_on = True
+            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    
+    def start_pulse_animation(self):
+        """Start pulse animation on AI state circles"""
+        if self.mode != "assistant":
+            return
+        
+        # Get the circle widgets
+        try:
+            glow = self.ids.ai_glow_outer
+            main_circle = self.ids.ai_circle_main
+            inner_circle = self.ids.ai_circle_inner
+            
+            # Create pulsing animation
+            anim_out = Animation(size=("140dp", "140dp"), duration=1) + Animation(size=("128dp", "128dp"), duration=1)
+            anim_out.repeat = True
+            anim_out.start(glow)
+            
+            anim_main = Animation(opacity=0.9, duration=1) + Animation(opacity=0.8, duration=1)
+            anim_main.repeat = True
+            anim_main.start(main_circle)
+        except:
+            pass  # Widgets might not be ready yet    
 
     # ---------------- AUTH ----------------
     def toggle_mode(self):
@@ -118,9 +201,11 @@ class RootWidget(Screen):
             await conn.close()
 
         self.current_user = username
+        self.user_initials = self.get_initials(fullname)
         self.mode = "assistant"
         self.show_status(f"Registered {username}, ready!")
         self.langchain_handler = LangchainHandler(username=self.current_user, NVIDIA_API_KEY=NVIDIA_API_KEY)
+        Clock.schedule_once(lambda dt: self.start_pulse_animation(), 0.5)
         self.start_assistant()
 
     async def login_user(self):
@@ -149,9 +234,11 @@ class RootWidget(Screen):
 
             if best_score > 0.75:
                 self.current_user = best_name
+                self.user_initials = self.get_initials(best_name)
                 self.mode = "assistant"
                 self.show_status(f"Welcome back {best_name}!")
                 self.langchain_handler = LangchainHandler(username=self.current_user, NVIDIA_API_KEY=NVIDIA_API_KEY)
+                Clock.schedule_once(lambda dt: self.start_pulse_animation(), 0.5)
                 self.start_assistant()
             else:
                 self.show_status("Face not recognized! Try again.")
@@ -227,11 +314,23 @@ class RootWidget(Screen):
         if self.cap and self.cap.isOpened():
             ret, frame = self.cap.read()
             if ret:
-                frame = cv2.flip(frame, 0)
-                buf = frame.tobytes()
-                texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
-                texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
-                self.ids.camera_preview.texture = texture
+                # Full screen background preview
+                frame_bg = cv2.flip(frame, 0)
+                buf_bg = frame_bg.tobytes()
+                texture_bg = Texture.create(size=(frame_bg.shape[1], frame_bg.shape[0]), colorfmt='bgr')
+                texture_bg.blit_buffer(buf_bg, colorfmt='bgr', bufferfmt='ubyte')
+                self.ids.camera_preview.texture = texture_bg
+                
+                # Small preview in corner (bottom-right)
+                if self.mode == "assistant" and self.is_camera_on:
+                    try:
+                        frame_small = cv2.flip(frame, 0)
+                        buf_small = frame_small.tobytes()
+                        texture_small = Texture.create(size=(frame_small.shape[1], frame_small.shape[0]), colorfmt='bgr')
+                        texture_small.blit_buffer(buf_small, colorfmt='bgr', bufferfmt='ubyte')
+                        self.ids.camera_preview_small.texture = texture_small
+                    except:
+                        pass  # Widget might not be ready yet
 
     def stop_assistant(self):
         """Stop Gemini & release resources"""
