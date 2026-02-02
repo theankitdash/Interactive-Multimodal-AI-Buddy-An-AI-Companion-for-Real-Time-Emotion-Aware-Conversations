@@ -1,6 +1,6 @@
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
-python-multipart==0.0.6
+python-multipart==0.0.22
 websockets>=13.0
 opencv-python==4.9.0.80
 facenet-pytorch==2.5.3
