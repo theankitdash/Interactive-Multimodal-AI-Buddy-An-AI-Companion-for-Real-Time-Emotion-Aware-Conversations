@@ -129,9 +129,6 @@ export function AssistantScreen() {
 
     return (
         <div className={styles.container}>
-            {/* Neural Network Gradient Background */}
-            <div className={styles.neuralBackground} />
-
             {/* Profile badge (top-left) */}
             <div className={styles.profileBadge}>
                 {user?.initials}

@@ -5,50 +5,6 @@
     overflow: hidden;
 }
 
-.neuralBackground {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    z-index: var(--z-background);
-    background: linear-gradient(135deg,
-            #0a0a0a 0%,
-            #1a0b2e 25%,
-            #16123f 50%,
-            #0f1b3f 75%,
-            #0a0a0a 100%);
-    background-size: 400% 400%;
-    animation: neuralGradient 15s ease infinite;
-}
-
-.neuralBackground::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background:
-        radial-gradient(circle at 20% 50%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
-        radial-gradient(circle at 80% 80%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
-        radial-gradient(circle at 40% 20%, rgba(59, 130, 246, 0.1) 0%, transparent 50%);
-    animation: neuralPulse 10s ease-in-out infinite;
-}
-
-.neuralBackground::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-image:
-        repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(99, 102, 241, 0.03) 2px, rgba(99, 102, 241, 0.03) 4px),
-        repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(99, 102, 241, 0.03) 2px, rgba(99, 102, 241, 0.03) 4px);
-    opacity: 0.5;
-}
-
 .profileBadge {
     position: absolute;
     top: 20px;
@@ -174,32 +130,4 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
-}
-
-@keyframes neuralGradient {
-    0% {
-        background-position: 0% 50%;
-    }
-
-    50% {
-        background-position: 100% 50%;
-    }
-
-    100% {
-        background-position: 0% 50%;
-    }
-}
-
-@keyframes neuralPulse {
-
-    0%,
-    100% {
-        opacity: 1;
-        transform: scale(1);
-    }
-
-    50% {
-        opacity: 0.8;
-        transform: scale(1.05);
-    }
 }
