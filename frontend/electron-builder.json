@@ -1,0 +1,55 @@
+{
+    "appId": "com.theankitdash.ai-buddy",
+    "productName": "AI Buddy",
+    "directories": {
+        "output": "release"
+    },
+    "files": [
+        "dist/**/*",
+        "dist-electron/**/*",
+        "../backend/**/*",
+        "!../backend/__pycache__",
+        "!../backend/.venv"
+    ],
+    "win": {
+        "target": [
+            "nsis",
+            "portable"
+        ],
+        "icon": "public/icon.ico"
+    },
+    "mac": {
+        "target": [
+            "dmg",
+            "zip"
+        ],
+        "icon": "public/icon.icns",
+        "category": "public.app-category.utilities"
+    },
+    "linux": {
+        "target": [
+            "AppImage",
+            "deb"
+        ],
+        "icon": "public/icon.png",
+        "category": "Utility"
+    },
+    "nsis": {
+        "oneClick": false,
+        "allowToChangeInstallationDirectory": true,
+        "createDesktopShortcut": true,
+        "createStartMenuShortcut": true,
+        "shortcutName": "AI Buddy"
+    },
+    "extraResources": [
+        {
+            "from": "../backend",
+            "to": "backend",
+            "filter": [
+                "**/*",
+                "!__pycache__",
+                "!.venv"
+            ]
+        }
+    ]
+}

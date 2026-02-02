@@ -1,0 +1,205 @@
+.container {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+.neuralBackground {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: var(--z-background);
+    background: linear-gradient(135deg,
+            #0a0a0a 0%,
+            #1a0b2e 25%,
+            #16123f 50%,
+            #0f1b3f 75%,
+            #0a0a0a 100%);
+    background-size: 400% 400%;
+    animation: neuralGradient 15s ease infinite;
+}
+
+.neuralBackground::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background:
+        radial-gradient(circle at 20% 50%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
+        radial-gradient(circle at 40% 20%, rgba(59, 130, 246, 0.1) 0%, transparent 50%);
+    animation: neuralPulse 10s ease-in-out infinite;
+}
+
+.neuralBackground::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image:
+        repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(99, 102, 241, 0.03) 2px, rgba(99, 102, 241, 0.03) 4px),
+        repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(99, 102, 241, 0.03) 2px, rgba(99, 102, 241, 0.03) 4px);
+    opacity: 0.5;
+}
+
+.profileBadge {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: bold;
+    z-index: var(--z-content);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.logoutButton {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    padding: 12px 24px;
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 15px;
+    z-index: var(--z-content);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    transition: all var(--transition-fast);
+}
+
+.logoutButton:hover {
+    background: var(--bg-secondary);
+    transform: translateY(-2px);
+}
+
+.aiIndicator {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-lg);
+    z-index: var(--z-content);
+}
+
+.aiGlow {
+    position: absolute;
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.aiCircle {
+    width: 128px;
+    height: 128px;
+    border-radius: 50%;
+    transition: background-color var(--transition-normal);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.aiStateLabel {
+    margin: 0;
+    font-size: 20px;
+    color: var(--text-primary);
+    font-weight: 500;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.mediaControls {
+    display: flex;
+    gap: var(--spacing-md);
+    margin-top: var(--spacing-sm);
+}
+
+.controlButton {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    font-size: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
+}
+
+.controlButton:hover {
+    transform: scale(1.05);
+}
+
+.controlButton.active {
+    background: var(--color-danger);
+    border-color: var(--color-danger);
+}
+
+.cameraPreview {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 264px;
+    height: 200px;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    z-index: var(--z-content);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.previewVideo {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+@keyframes neuralGradient {
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 100% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+@keyframes neuralPulse {
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.8;
+        transform: scale(1.05);
+    }
+}

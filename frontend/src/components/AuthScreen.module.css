@@ -1,0 +1,123 @@
+.container {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.cameraBackground {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: var(--z-background);
+}
+
+.authCard {
+    position: relative;
+    z-index: var(--z-content);
+    width: 90%;
+    max-width: 450px;
+    padding: var(--spacing-lg);
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    animation: slideInUp 0.4s ease;
+}
+
+.title {
+    font-size: 56px;
+    font-weight: bold;
+    color: var(--color-primary);
+    text-align: center;
+    margin: 0;
+}
+
+.subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+    text-align: center;
+    margin: 0 0 var(--spacing-sm) 0;
+}
+
+.captureStatus {
+    font-size: 15px;
+    color: var(--color-primary);
+    text-align: center;
+    margin: 0;
+    padding: var(--spacing-sm);
+    background: rgba(99, 102, 241, 0.1);
+    border-radius: var(--radius-sm);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.input {
+    width: 100%;
+    padding: 14px 16px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 15px;
+    transition: border-color var(--transition-fast);
+}
+
+.input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.input::placeholder {
+    color: var(--text-muted);
+}
+
+.actionButton {
+    width: 100%;
+    padding: 16px;
+    background: var(--color-primary);
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+    border-radius: 14px;
+    box-shadow: 0 0 0 4px var(--color-primary-glow);
+    transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.actionButton:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 0 0 6px var(--color-primary-glow);
+}
+
+.actionButton:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.actionButton:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.switchButton {
+    width: 100%;
+    padding: 14px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 14px;
+    transition: all var(--transition-fast);
+}
+
+.switchButton:hover:not(:disabled) {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
