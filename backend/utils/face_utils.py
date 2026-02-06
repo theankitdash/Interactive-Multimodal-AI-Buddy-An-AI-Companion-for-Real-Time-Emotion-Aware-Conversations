@@ -70,6 +70,12 @@ def get_embedding(img_bgr):
         with torch.no_grad():
             embedding = facenet(face_tensor.unsqueeze(0)).cpu().numpy()
         
+        # embedding shape: (1, 512) → (512,)
+        embedding = embedding.squeeze(0)
+
+        # Normalize (strongly recommended)
+        embedding = embedding / np.linalg.norm(embedding)
+        
         print(f"[DEBUG] Face embedding extracted successfully, shape: {embedding.shape}")
         return embedding
         

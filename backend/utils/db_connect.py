@@ -1,6 +1,7 @@
 import os
 import asyncpg
 from dotenv import load_dotenv
+from pgvector.asyncpg import register_vector
 
 load_dotenv()
 
@@ -13,12 +14,16 @@ async def connect_db():
         port=os.getenv("DB_PORT")
     )
 
+    await register_vector(conn)
+
     await conn.execute("""
 
+        CREATE EXTENSION IF NOT EXISTS vector;
+        
         CREATE TABLE IF NOT EXISTS user_details (
             username TEXT PRIMARY KEY NOT NULL,
             name TEXT NOT NULL,
-            face_embedding FLOAT8[]
+            face_embedding vector(512)
         );
 
     """)

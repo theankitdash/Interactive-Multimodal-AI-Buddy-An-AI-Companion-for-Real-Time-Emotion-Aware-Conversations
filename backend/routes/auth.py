@@ -52,8 +52,8 @@ async def register_user(request: RegisterRequest):
     try:
         await conn.execute(
             """INSERT INTO user_details (username, name, face_embedding)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (username) DO UPDATE SET name=$2, face_embedding=$3""",
+               VALUES ($1, $2, $3::vector)
+               ON CONFLICT (username) DO UPDATE SET name=$2, face_embedding=$3::vector""",
             username, fullname, face_embedding
         )
     except Exception as e:
@@ -107,7 +107,7 @@ async def capture_face(request: FaceCaptureRequest):
         return FaceCaptureResponse(
             success=True,
             message="Face captured successfully",
-            embedding=embedding.flatten().tolist()
+            embedding=embedding.tolist()
         )
     
     except HTTPException:
@@ -135,7 +135,7 @@ async def update_face_embedding(embeddings: list, username: str = Query(...)):
         conn = await connect_db()
         try:
             await conn.execute(
-                """UPDATE user_details SET face_embedding = $1 WHERE username = $2""",
+                """UPDATE user_details SET face_embedding = $1::vector WHERE username = $2""",
                 avg_embedding, username
             )
         finally:
@@ -176,7 +176,7 @@ async def login_user(request: LoginRequest):
         
         best_username, best_name, best_score = None, None, -1
         for row in rows:
-            ref_emb = np.array(row["face_embedding"])
+            ref_emb = np.array(row["face_embedding"], dtype=np.float32)
             score = cos_sim(face_embedding, ref_emb)
             if score > best_score:
                 best_username, best_name, best_score = row["username"], row["name"], score
@@ -316,15 +316,16 @@ async def register_multi_sample(request: MultiSampleRegisterRequest):
         )
     
     # Calculate average embedding
-    face_embedding = np.mean(np.vstack(embeddings), axis=0).tolist()
+    face_embedding = face_embedding / np.linalg.norm(face_embedding)
+    face_embedding = face_embedding.tolist()
     
     # Store in database
     conn = await connect_db()
     try:
         await conn.execute(
             """INSERT INTO user_details (username, name, face_embedding)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (username) DO UPDATE SET name=$2, face_embedding=$3""",
+               VALUES ($1, $2, $3::vector)
+               ON CONFLICT (username) DO UPDATE SET name=$2, face_embedding=$3::vector""",
             username, fullname, face_embedding
         )
         print(f"[INFO] Registered {username} with {len(embeddings)}/{len(request.sample_images)} samples")
