@@ -14,15 +14,33 @@ export function AssistantScreen() {
 
     const wsRef = useRef<WebSocket | null>(null);
     const frameIntervalRef = useRef<number | null>(null);
+    const isCleanedUpRef = useRef<boolean>(false);  // Guard against StrictMode double-mount
 
     useEffect(() => {
         if (!user) return;
+
+        // Reset cleanup flag on mount
+        isCleanedUpRef.current = false;
+
+        // If there's already an active WebSocket, don't create a new one
+        // This handles StrictMode's double-mount behavior
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            console.log('[WebSocket] Already connected, skipping duplicate connection');
+            return;
+        }
 
         // Connect WebSocket
         const ws = new WebSocket(`${BACKEND_WS_URL}/api/assistant/stream`);
         wsRef.current = ws;
 
         ws.onopen = () => {
+            // Check if we've been cleaned up while connecting
+            if (isCleanedUpRef.current) {
+                console.log('[WebSocket] Cleaned up during connection, closing');
+                ws.close();
+                return;
+            }
+
             console.log('[WebSocket] Connected');
             // Send initialization
             ws.send(JSON.stringify({ username: user.username }));
@@ -30,7 +48,7 @@ export function AssistantScreen() {
             // Start microphone
             if (!isMuted) {
                 startMicrophone((audioData) => {
-                    if (ws.readyState === WebSocket.OPEN && !isMuted) {
+                    if (ws.readyState === WebSocket.OPEN && !isMuted && !isCleanedUpRef.current) {
                         const base64 = btoa(String.fromCharCode(...new Uint8Array(audioData.buffer)));
                         ws.send(JSON.stringify({ type: 'audio', data: base64 }));
                     }
@@ -39,7 +57,7 @@ export function AssistantScreen() {
 
             // Start sending video frames (1 frame/second) - only if camera is on
             frameIntervalRef.current = window.setInterval(async () => {
-                if (isCameraOn) {
+                if (isCameraOn && !isCleanedUpRef.current) {
                     const frameData = await captureFrame();
                     if (frameData && ws.readyState === WebSocket.OPEN) {
                         const base64Data = frameData.split(',')[1];
@@ -50,6 +68,9 @@ export function AssistantScreen() {
         };
 
         ws.onmessage = (event) => {
+            // Ignore messages if cleaned up
+            if (isCleanedUpRef.current) return;
+
             try {
                 const message = JSON.parse(event.data);
 
@@ -73,14 +94,30 @@ export function AssistantScreen() {
         };
 
         return () => {
+            // Mark as cleaned up to prevent any pending callbacks from executing
+            isCleanedUpRef.current = true;
+
             // Cleanup
             if (frameIntervalRef.current) {
                 clearInterval(frameIntervalRef.current);
+                frameIntervalRef.current = null;
             }
+
+            // Only send close message if connection is OPEN (not CONNECTING)
             if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'close' }));
+                try {
+                    ws.send(JSON.stringify({ type: 'close' }));
+                } catch (e) {
+                    console.warn('[WebSocket] Failed to send close message:', e);
+                }
+            }
+
+            // Close the WebSocket regardless of state
+            if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
                 ws.close();
             }
+
+            wsRef.current = null;
             stopMicrophone();
             stopCamera();
             stopAudio();

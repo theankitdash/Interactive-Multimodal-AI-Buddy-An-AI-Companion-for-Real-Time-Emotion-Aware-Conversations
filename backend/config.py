@@ -27,5 +27,5 @@ LIVENESS_SMILE_HEIGHT_RATIO = 0.03
 FACE_REGISTRATION_SAMPLES = 50  # Number of samples to capture during registration
 
 # Gemini settings
-GEMINI_MODEL = "gemini-2.0-flash-exp"
+GEMINI_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 GEMINI_FRAME_RATE = 1  # Send 1 frame per second to Gemini

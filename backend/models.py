@@ -28,24 +28,6 @@ class FaceCaptureResponse(BaseModel):
     embedding: Optional[List[float]] = None
 
 
-class LivenessChallengeRequest(BaseModel):
-    challenge_type: str  # "blink", "head_movement", "smile"
-    image_data: str  # Base64 encoded frame
-    reference_data: Optional[dict] = None  # For stateful challenges like head movement
-
-
-class LivenessChallengeResponse(BaseModel):
-    success: bool
-    message: str
-    challenge_complete: bool
-    reference_data: Optional[dict] = None
-
-
-class LivenessChallengesResponse(BaseModel):
-    challenges: List[str]
-    message: str
-
-
 class MultiSampleRegisterRequest(BaseModel):
     username: str
     fullname: str

@@ -21,10 +21,20 @@ app.add_middleware(
 
 # Import routes
 from routes import auth, assistant, media
+from utils.db_connect import init_db
 
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(assistant.router, prefix="/api/assistant", tags=["Assistant"])
 app.include_router(media.router, prefix="/api/media", tags=["Media"])
+
+
+@app.on_event("startup")
+async def startup_db_client():
+    try:
+        await init_db()
+    except Exception as e:
+        # Log error but don't crash if it's just a concurrency glitch on startup
+        print(f"Database initialization warning: {e}")
 
 
 @app.get("/")

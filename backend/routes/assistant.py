@@ -1,29 +1,66 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ai.gemini_handler import GeminiHandler
-from ai.langchain_handler import LangchainHandler
+from graphs.agent_graph import app as agent_graph
+from utils.memory import retrieve_knowledge, get_upcoming_events, store_knowledge, store_event, get_user_profile
 from config import GEMINI_API_KEY, NVIDIA_API_KEY
 import asyncio
 import numpy as np
 import json
 import base64
+import logging
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Store active sessions
 active_sessions = {}
+
+class SessionState:
+    """Manage conversation session state"""
+    def __init__(self, session_id: str, username: str):
+        self.session_id = session_id
+        self.username = username
+        self.chat_history = []
+        self.user_profile = {}
+        self.gemini_handler = None
+        self.websocket = None
+        self.last_audio_time = 0
+        
+    async def initialize_user_context(self):
+        """Load user profile and context"""
+        try:
+            profile = await get_user_profile(self.username)
+            self.user_profile = profile or {"name": self.username}
+        except Exception as e:
+            logger.warning(f"Failed to load user profile: {e}")
+            self.user_profile = {"name": self.username}
+    
+    def add_to_history(self, role: str, message: str):
+        """Track conversation history for context"""
+        self.chat_history.append(f"{role}: {message}")
+        # Keep only last 10 messages for context
+        if len(self.chat_history) > 10:
+            self.chat_history = self.chat_history[-10:]
+    
+    async def cleanup(self):
+        """Clean up resources"""
+        if self.gemini_handler:
+            try:
+                await self.gemini_handler.stop()
+            except Exception as e:
+                logger.error(f"Error stopping gemini handler: {e}")
 
 
 @router.websocket("/stream")
 async def assistant_stream(websocket: WebSocket):
     """
     WebSocket endpoint for real-time AI assistant interaction.
-    Handles audio/video streaming bidirectionally.
+    Integrates reasoning (Mistral) and generation (Gemini) pipelines.
+    Handles audio/video streaming bidirectionally with context awareness.
     """
     await websocket.accept()
     
-    session_id = None
-    gemini_handler = None
-    langchain_handler = None
+    session_state = None
     
     try:
         # Wait for initialization message with username
@@ -36,30 +73,41 @@ async def assistant_stream(websocket: WebSocket):
             await websocket.close()
             return
         
-        session_id = username
+        # Initialize session state
+        session_state = SessionState(session_id=username, username=username)
+        session_state.websocket = websocket
         
-        # Initialize handlers
-        gemini_handler = GeminiHandler(api_key=GEMINI_API_KEY)
-        langchain_handler = LangchainHandler(username=username, NVIDIA_API_KEY=NVIDIA_API_KEY)
-        gemini_handler.attach_memory(langchain_handler)
+        # Load user context (profile, preferences, etc.)
+        await session_state.initialize_user_context()
         
-        # Start Gemini session
-        asyncio.create_task(gemini_handler.start())
+        # Initialize Gemini handler for real-time audio streaming
+        session_state.gemini_handler = GeminiHandler(api_key=GEMINI_API_KEY)
+        
+        # Build system instruction with user context
+        user_name = session_state.user_profile.get('name', username)
+        system_instruction = f"""You are a friendly AI companion talking to {user_name}.
+Be natural, conversational, and empathetic. Remember details the user shares.
+If they mention preferences, events, or personal information, acknowledge it warmly.
+Keep responses concise for natural conversation flow."""
+        
+        # Start Gemini session for live streaming (audio I/O)
+        gemini_task = asyncio.create_task(session_state.gemini_handler.start(system_instruction=system_instruction))
         
         # Store session
-        active_sessions[session_id] = {
-            "gemini": gemini_handler,
-            "langchain": langchain_handler,
-            "websocket": websocket
-        }
+        active_sessions[username] = session_state
         
-        await websocket.send_json({"status": "connected", "message": "Assistant ready"})
+        logger.info(f"[WebSocket] User {username} connected. Profile: {session_state.user_profile}")
+        await websocket.send_json({
+            "status": "connected", 
+            "message": f"Welcome, {session_state.user_profile.get('name', username)}!",
+            "user": session_state.user_profile
+        })
         
-        # Main loop: receive from client, send to Gemini, stream back responses
+        # Main loop: receive from client, process through reasoning pipeline, send to Gemini
         async def receive_from_client():
-            """Receive audio/video from client and forward to Gemini"""
-            while True:
-                try:
+            """Receive audio/video from client and route to Gemini"""
+            try:
+                while True:
                     data = await websocket.receive_text()
                     message = json.loads(data)
                     
@@ -67,34 +115,59 @@ async def assistant_stream(websocket: WebSocket):
                     msg_data = message.get("data")
                     
                     if msg_type == "audio":
-                        # Decode base64 audio and send to Gemini
-                        audio_bytes = base64.b64decode(msg_data)
-                        audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
-                        await gemini_handler.send_audio(audio_array)
+                        # Decode base64 audio and send to Gemini for processing
+                        try:
+                            # Update last audio timestamp to prevent double-processing text
+                            session_state.last_audio_time = asyncio.get_event_loop().time()
+                            
+                            audio_bytes = base64.b64decode(msg_data)
+                            audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+                            await session_state.gemini_handler.send_audio(audio_array)
+                        except Exception as e:
+                            logger.error(f"Error processing audio: {e}")
                     
                     elif msg_type == "video":
-                        # Decode base64 image and send to Gemini
-                        import cv2
-                        image_data = base64.b64decode(msg_data)
-                        nparr = np.frombuffer(image_data, np.uint8)
-                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        if frame is not None:
-                            await gemini_handler.send_video(frame)
+                        # Decode base64 image and send to Gemini for facial analysis
+                        try:
+                            import cv2
+                            image_data = base64.b64decode(msg_data)
+                            nparr = np.frombuffer(image_data, np.uint8)
+                            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                            if frame is not None:
+                                await session_state.gemini_handler.send_video(frame)
+                        except Exception as e:
+                            logger.error(f"Error processing video: {e}")
+                    
+                    elif msg_type == "text":
+                        # Check if this text is likely a transcription of recent audio
+                        # If so, ignore it to prevent double-response (Gemini Audio + Agent Text)
+                        current_time = asyncio.get_event_loop().time()
+                        # Increased lockout to 10s to ensure we don't process transcription as command
+                        if session_state.last_audio_time > 0 and (current_time - session_state.last_audio_time < 10.0):
+                            logger.info(f"[Text Ignored] Skipping text input as audio was recently processed: {msg_data[:50]}")
+                            continue
+
+                        # Process text input through reasoning pipeline (silent mode for audio sessions)
+                        # Only runs reasoning to save facts/events, doesn't generate competing response
+                        await process_user_text(session_state, msg_data, silent=True)
+                    
+                    elif msg_type == "text_only":
+                        # Explicit text-only mode (no audio) - full response generation
+                        await process_user_text(session_state, msg_data, silent=False)
                     
                     elif msg_type == "close":
                         break
-                
-                except WebSocketDisconnect:
-                    break
-                except Exception as e:
-                    print(f"[WebSocket Receive Error] {e}")
-                    break
-        
+            
+            except WebSocketDisconnect:
+                logger.info(f"[WebSocket] Client {session_state.username} disconnected")
+            except Exception as e:
+                logger.error(f"[WebSocket Receive Error] {e}")
+
         async def send_to_client():
             """Get audio replies from Gemini and send to client"""
-            while True:
-                try:
-                    reply = await gemini_handler.get_audio_reply()
+            try:
+                while True:
+                    reply = await session_state.gemini_handler.get_audio_reply()
                     if reply:
                         sample_rate, audio_np = reply
                         # Convert to bytes and base64
@@ -108,34 +181,144 @@ async def assistant_stream(websocket: WebSocket):
                         })
                     
                     await asyncio.sleep(0.01)
-                
-                except Exception as e:
-                    print(f"[WebSocket Send Error] {e}")
-                    break
-        
-        # Run both tasks concurrently
+            
+            except Exception as e:
+                logger.error(f"[WebSocket Send Error] {e}")
+
+        # Transcription processing - processes USER input transcriptions for fact/event extraction
+        # Only processes what the USER said, NOT what Gemini said
+        async def process_transcriptions():
+            """
+            Process USER input transcriptions through Mistral reasoning.
+            This captures what the USER said and extracts facts/events for storage.
+            NOTE: Only user transcriptions are queued, not model output.
+            """
+            last_process_time = 0
+            min_interval = 2.0  # Minimum seconds between processing
+            
+            try:
+                while True:
+                    # Check if model is currently speaking - skip processing during responses
+                    if session_state.gemini_handler._is_model_speaking:
+                        await asyncio.sleep(0.2)
+                        continue
+                    
+                    transcription = await session_state.gemini_handler.get_transcription()
+                    if transcription:
+                        current_time = asyncio.get_event_loop().time()
+                        
+                        # Debounce: skip if processed too recently
+                        if (current_time - last_process_time) < min_interval:
+                            logger.debug(f"[Transcription] Skipping due to debounce: {transcription[:50]}")
+                            continue
+                        
+                        logger.info(f"[Transcription] Processing USER input: {transcription[:100]}")
+                        last_process_time = current_time
+                        
+                        # Run reasoning on user transcription (silent mode - no text response)
+                        # This extracts facts/events without generating a competing response
+                        await process_user_text(session_state, transcription, silent=True)
+                    
+                    await asyncio.sleep(0.1)  # Check periodically
+            
+            except Exception as e:
+                logger.error(f"[Transcription Processing Error] {e}")
+
+        # Run audio communication tasks ONLY (simplified for debugging)
         await asyncio.gather(
             receive_from_client(),
-            send_to_client()
+            send_to_client(),
+            process_transcriptions(),  
+            return_exceptions=True
         )
     
     except WebSocketDisconnect:
-        print(f"[WebSocket] Client disconnected")
+        logger.info(f"[WebSocket] Client disconnected")
     except Exception as e:
-        print(f"[WebSocket Error] {e}")
+        logger.error(f"[WebSocket Error] {e}")
+        try:
+            await websocket.send_json({"error": str(e)})
+        except:
+            pass
     finally:
         # Cleanup
-        if session_id and session_id in active_sessions:
+        if session_state:
             try:
-                if gemini_handler:
-                    await gemini_handler.stop()
-                if langchain_handler:
-                    await langchain_handler.stop()
-            except:
-                pass
-            del active_sessions[session_id]
+                await session_state.cleanup()
+                if session_state.session_id in active_sessions:
+                    del active_sessions[session_state.session_id]
+                logger.info(f"[WebSocket] Cleaned up session for {session_state.username}")
+            except Exception as e:
+                logger.error(f"Error during cleanup: {e}")
         
         try:
             await websocket.close()
         except:
             pass
+
+
+async def process_user_text(session_state: SessionState, user_input: str, silent: bool = False):
+    """
+    Process user text through the reasoning and generation pipeline.
+    
+    Args:
+        session_state: Current session state
+        user_input: User's text input
+        silent: If True, only run reasoning (save facts/events) without sending response.
+                This prevents dual voice when Gemini Live Audio is active.
+    
+    1. Run reasoning node (Mistral) for intent classification and fact extraction
+    2. Run generation node (Gemini) with retrieved context (if not silent)
+    3. Store any new facts/events to memory
+    """
+    try:
+        # Add user input to history
+        session_state.add_to_history("user", user_input)
+        
+        # Prepare state for agent graph
+        agent_state = {
+            "input_text": user_input,
+            "username": session_state.username,
+            "chat_history": session_state.chat_history,
+            "user_profile": session_state.user_profile,
+            "reasoning_context": "",
+            "final_response": "",
+            "audio_mode": silent  # Skip generation when in audio mode (Gemini Live handles response)
+        }
+        
+        logger.info(f"[Processing] User {session_state.username}: {user_input[:100]} (silent={silent})")
+        
+        # Run through agent graph (reasoning + generation in parallel)
+        result = await agent_graph.ainvoke(agent_state)
+        
+        reasoning_context = result.get("reasoning_context", "")
+        final_response = result.get("final_response", "No response generated")
+        
+        # Add assistant response to history
+        session_state.add_to_history("assistant", final_response)
+        
+        # Only send response if not in silent mode
+        # Silent mode is used when Gemini Live Audio is handling voice responses
+        if not silent:
+            await session_state.websocket.send_json({
+                "type": "text_response",
+                "response": final_response,
+                "context": reasoning_context,
+                "thinking": True  # Indicates reasoning happened
+            })
+            logger.info(f"[Processing Complete] Response sent to {session_state.username}")
+        else:
+            # In silent mode, just log that reasoning was done
+            logger.info(f"[Reasoning Complete] Silent mode - saved context: {reasoning_context[:100]}")
+        
+    except Exception as e:
+        logger.error(f"Error processing user text: {e}", exc_info=True)
+        if not silent:
+            try:
+                await session_state.websocket.send_json({
+                    "type": "error",
+                    "error": f"Processing error: {str(e)}"
+                })
+            except:
+                pass
+

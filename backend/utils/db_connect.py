@@ -13,58 +13,148 @@ async def connect_db():
         host=os.getenv("DB_HOST"),
         port=os.getenv("DB_PORT")
     )
-
     await register_vector(conn)
+    return conn
 
-    await conn.execute("""
+async def init_db():
+    conn = await connect_db()
+    try:
+        # EXTENSIONS
+        await conn.execute("""
+            CREATE EXTENSION IF NOT EXISTS vector;
+            CREATE EXTENSION IF NOT EXISTS pgcrypto;
+        """)
 
-        CREATE EXTENSION IF NOT EXISTS vector;
+        await conn.execute("""
+            
+            CREATE TABLE IF NOT EXISTS user_details (
+                username TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                face_embedding vector(512)        
+            );
+                           
+        """)
+
+        # ENUM TYPES
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'event_type') THEN
+                    CREATE TYPE event_type AS ENUM (
+                        'task', 'reminder', 'meeting', 'birthday', 'other'
+                    );
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'event_status') THEN
+                    CREATE TYPE event_status AS ENUM (
+                        'pending', 'in-progress', 'completed', 'dismissed'
+                    );
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'knowledge_category') THEN
+                    CREATE TYPE knowledge_category AS ENUM (
+                        'preference', 'memory', 'skill', 'habit', 'other'
+                    );
+                END IF;
+            END $$ LANGUAGE plpgsql;;
+        """)
+
+        await conn.execute("""
+
+            CREATE TABLE IF NOT EXISTS events (
+                event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                           
+                username TEXT NOT NULL REFERENCES user_details(username) ON DELETE CASCADE,
+
+                type event_type NOT NULL,
+                description TEXT NOT NULL,
+
+                event_time TIMESTAMPTZ NOT NULL,
+                repeat_interval INTERVAL,
+
+                priority SMALLINT CHECK (priority BETWEEN 1 AND 5) DEFAULT 3, 
+
+                status event_status NOT NULL DEFAULT 'pending',
+
+                completed_at TIMESTAMPTZ, 
+
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_events_username
+            ON events(username);
+        """)
+
         
-        CREATE TABLE IF NOT EXISTS user_details (
-            username TEXT PRIMARY KEY NOT NULL,
-            name TEXT NOT NULL,
-            face_embedding vector(512)
-        );
+        await conn.execute("""
 
-    """)
+            CREATE TABLE IF NOT EXISTS user_knowledge (
+                knowledge_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                           
+                username TEXT NOT NULL REFERENCES user_details(username) ON DELETE CASCADE,
+                           
+                fact TEXT NOT NULL, 
+                           
+                category knowledge_category DEFAULT 'other',
+                importance SMALLINT CHECK (importance BETWEEN 1 AND 5) DEFAULT 3,
+                            
+                embedding vector(768),
+                           
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                last_updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                           
+                UNIQUE (username, fact)
+            );
+        """)
 
-    await conn.execute("""
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_knowledge_username
+            ON user_knowledge(username);
+        """)
 
-        CREATE TABLE IF NOT EXISTS events (
-            event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            username TEXT NOT NULL REFERENCES user_details(username) ON DELETE CASCADE,
+        # TIMESTAMP TRIGGERS
+        await conn.execute("""
+            CREATE OR REPLACE FUNCTION set_updated_at()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = CURRENT_TIMESTAMP;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
 
-            type TEXT NOT NULL CHECK (type IN ('task', 'reminder', 'meeting', 'birthday', 'other')),
-            description TEXT NOT NULL,
+        await conn.execute("""
+            CREATE OR REPLACE FUNCTION set_last_updated()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.last_updated = CURRENT_TIMESTAMP;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
 
-            event_time TIMESTAMP NOT NULL, -- due date / reminder time
-            repeat_interval INTERVAL, -- NULL if one-time, e.g., '1 day', '1 week'
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_events_updated'
+                ) THEN
+                    CREATE TRIGGER trg_events_updated
+                    BEFORE UPDATE ON events
+                    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+                END IF;
 
-            priority SMALLINT CHECK (priority BETWEEN 1 AND 5) DEFAULT 3, -- urgency
-
-            status TEXT NOT NULL DEFAULT 'pending'
-                CHECK (status IN ('pending', 'in-progress', 'completed', 'dismissed')),
-
-            completed_at TIMESTAMP, -- for completed tasks or acknowledged reminders
-
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-    """)
-
-    await conn.execute("""
-
-        CREATE TABLE IF NOT EXISTS user_knowledge (
-            knowledge_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            username TEXT NOT NULL REFERENCES user_details(username) ON DELETE CASCADE,
-            fact TEXT NOT NULL, -- the information about the user
-            category TEXT CHECK (category IN ('preference', 'memory', 'skill', 'habit', 'other')) DEFAULT 'other',
-            importance SMALLINT CHECK (importance BETWEEN 1 AND 5) DEFAULT 3, -- priority for recall
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-    """)
-    
-    return conn 
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_user_knowledge_updated'
+                ) THEN
+                    CREATE TRIGGER trg_user_knowledge_updated
+                    BEFORE UPDATE ON user_knowledge
+                    FOR EACH ROW EXECUTE FUNCTION set_last_updated();
+                END IF;
+            END $$ LANGUAGE plpgsql;;
+        """)
+    finally:
+        await conn.close() 

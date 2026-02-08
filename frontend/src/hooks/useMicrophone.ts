@@ -32,7 +32,8 @@ export function useMicrophone() {
             };
 
             source.connect(workletNode);
-            workletNode.connect(audioContext.destination);
+            // DON'T connect to destination - that would play mic audio through speakers!
+            // workletNode.connect(audioContext.destination);  // REMOVED - causes feedback
 
             streamRef.current = mediaStream;
             audioContextRef.current = audioContext;
