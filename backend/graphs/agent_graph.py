@@ -38,7 +38,8 @@ async def generation_wrapper(state):
 
 workflow.add_node("generation", generation_wrapper)
 
-# Sequential: Reasoning first, then conditional generation
+# Sequential execution: Reasoning first, then conditional generation
+# Note: LangGraph executes nodes sequentially along edges, not in parallel
 workflow.set_entry_point("reasoning")
 
 # After reasoning, check if we should generate

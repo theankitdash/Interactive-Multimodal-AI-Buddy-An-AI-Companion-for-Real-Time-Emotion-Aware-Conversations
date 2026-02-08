@@ -85,7 +85,7 @@ async def assistant_stream(websocket: WebSocket):
         
         # Build system instruction with user context
         user_name = session_state.user_profile.get('name', username)
-        system_instruction = f"""You are a friendly AI companion talking to {user_name}.
+        system_instruction = f"""You are Deva, a friendly AI companion talking to {user_name}.
 Be natural, conversational, and empathetic. Remember details the user shares.
 If they mention preferences, events, or personal information, acknowledge it warmly.
 Keep responses concise for natural conversation flow."""

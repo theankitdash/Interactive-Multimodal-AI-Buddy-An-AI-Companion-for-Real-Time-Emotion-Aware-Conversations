@@ -11,7 +11,7 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 async def generation_node(state):
     """
     Generates the final response using Gemini.
-    Runs in parallel with reasoning (but can start immediately).
+    Executes after reasoning in sequential flow.
     """
     input_text = state["input_text"]
     username = state["username"]
@@ -23,11 +23,14 @@ async def generation_node(state):
     knowledge = await retrieve_knowledge(username, input_text)
     events = await get_upcoming_events(username)
     
-    knowledge_str = "\n".join([f"- {k['fact']}" for k in knowledge])
-    events_str = "\n".join([f"- {e['description']} at {e['event_time']}" for e in events])
+    knowledge_str = "\n".join([f"- {k['fact']}" for k in knowledge]) if knowledge else "None"
+    events_str = "\n".join([f"- {e['description']} at {e['event_time']}" for e in events]) if events else "None"
     
     user_profile = state.get("user_profile", {})
     name = user_profile.get("name", "User")
+    
+    # Properly format chat history
+    chat_history_str = "\n".join(chat_history[-5:]) if chat_history else "No previous messages"
 
     # 2. Construct Prompt
     system_prompt = f"""
@@ -43,7 +46,7 @@ async def generation_node(state):
     {events_str}
     
     Chat History:
-    {chat_history[-5:]}
+    {chat_history_str}
     
     Respond naturally, empathetically, and concisely to the user.
     """

@@ -1,10 +1,30 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
 load_dotenv()
 
-app = FastAPI(title="AI Buddy Backend", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown events."""
+    # Startup
+    try:
+        from utils.db_connect import init_pool
+        await init_pool()
+    except Exception as e:
+        print(f"Database initialization warning: {e}")
+    
+    yield
+    
+    # Shutdown
+    try:
+        from utils.db_connect import close_pool
+        await close_pool()
+    except Exception as e:
+        print(f"Database cleanup warning: {e}")
+
+app = FastAPI(title="AI Buddy Backend", version="1.0.0", lifespan=lifespan)
 
 # CORS configuration for local Electron app and dev server
 app.add_middleware(
@@ -21,20 +41,10 @@ app.add_middleware(
 
 # Import routes
 from routes import auth, assistant, media
-from utils.db_connect import init_db
 
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(assistant.router, prefix="/api/assistant", tags=["Assistant"])
 app.include_router(media.router, prefix="/api/media", tags=["Media"])
-
-
-@app.on_event("startup")
-async def startup_db_client():
-    try:
-        await init_db()
-    except Exception as e:
-        # Log error but don't crash if it's just a concurrency glitch on startup
-        print(f"Database initialization warning: {e}")
 
 
 @app.get("/")

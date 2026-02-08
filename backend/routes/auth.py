@@ -3,7 +3,7 @@ from models import (
     RegisterRequest, LoginRequest, UserResponse, 
     FaceCaptureRequest, FaceCaptureResponse, MultiSampleRegisterRequest
 )
-from utils.db_connect import connect_db
+from utils.db_connect import get_pool
 from utils.face_utils import get_embedding
     
 import numpy as np
@@ -65,17 +65,15 @@ async def register_user(req: RegisterRequest):
     
     avg = normalize(np.mean(embeddings, axis=0))
     
-    conn = await connect_db()
-    try:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO user_details (username, name, face_embedding)
                VALUES ($1, $2, $3::vector)
                ON CONFLICT (username) 
                DO UPDATE SET name= EXCLUDED.name, 
                              face_embedding = EXCLUDED.face_embedding;
-            """,req.username, req.fullname, avg.tolist())
-    finally:
-        await conn.close()
+            """, req.username, req.fullname, avg.tolist())
     
     return UserResponse(
         username=req.username,
@@ -88,8 +86,8 @@ async def login_user(req: LoginRequest):
     embeddings = np.array(req.face_embeddings, dtype=np.float32)
     probe = normalize(np.mean(embeddings, axis=0))
     
-    conn = await connect_db()
-    try:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         row = await conn.fetchrow("""
             SELECT username, name,
                     1 - (face_embedding <=> $1::vector) AS score
@@ -107,8 +105,6 @@ async def login_user(req: LoginRequest):
             fullname=row["name"],
             initials=get_initials(row["name"])
         )
-    finally:
-        await conn.close()    
 
 @router.post("/register-multi-sample", response_model=UserResponse)
 async def register_multi_sample(req: MultiSampleRegisterRequest):
@@ -130,8 +126,8 @@ async def register_multi_sample(req: MultiSampleRegisterRequest):
     avg = normalize(np.mean(embeddings, axis=0))
     
     # Store in database
-    conn = await connect_db()
-    try:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO user_details (username, name, face_embedding)
                VALUES ($1, $2, $3::vector)
@@ -139,8 +135,6 @@ async def register_multi_sample(req: MultiSampleRegisterRequest):
                DO UPDATE SET name=EXCLUDED.name,
                              face_embedding=EXCLUDED.face_embedding
             """, req.username, req.fullname, avg.tolist())
-    finally:
-        await conn.close()
     
     return UserResponse(
         username=req.username,

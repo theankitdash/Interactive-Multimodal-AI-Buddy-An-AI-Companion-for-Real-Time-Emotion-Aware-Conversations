@@ -16,7 +16,7 @@ llm = ChatNVIDIA(
 async def reasoning_node(state):
     """
     Analyzes input text for facts or events.
-    Runs in parallel with generation.
+    Executes before generation in sequential flow.
     """
     input_text = state["input_text"]
     username = state["username"]

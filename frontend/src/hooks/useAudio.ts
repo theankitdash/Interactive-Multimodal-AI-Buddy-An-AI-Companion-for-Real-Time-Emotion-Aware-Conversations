@@ -1,9 +1,10 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useState } from 'react';
 
 export function useAudio() {
     const audioContextRef = useRef<AudioContext | null>(null);
     const nextStartTimeRef = useRef<number>(0);
-    const isPlayingRef = useRef<boolean>(false);
+    const [isPlaying, setIsPlaying] = useState<boolean>(false);
+    const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
     const getAudioContext = useCallback((sampleRate: number = 24000): AudioContext => {
         if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
@@ -54,15 +55,22 @@ export function useAudio() {
             source.connect(audioContext.destination);
             source.start(nextStartTimeRef.current);
 
+            // Track active source
+            activeSourcesRef.current.add(source);
+            setIsPlaying(true);
+
             // Update next start time for the following chunk
             nextStartTimeRef.current += audioBuffer.duration;
-            isPlayingRef.current = true;
 
-            // Track when playback ends
+            // Track when playback ends and cleanup
             source.onended = () => {
+                // Disconnect and remove from active sources to prevent memory leak
+                source.disconnect();
+                activeSourcesRef.current.delete(source);
+
                 // Check if there's more audio scheduled
                 if (audioContext.currentTime >= nextStartTimeRef.current - 0.1) {
-                    isPlayingRef.current = false;
+                    setIsPlaying(false);
                 }
             };
 
@@ -72,17 +80,28 @@ export function useAudio() {
     }, [getAudioContext]);
 
     const stop = useCallback(() => {
+        // Stop all active sources
+        activeSourcesRef.current.forEach(source => {
+            try {
+                source.stop();
+                source.disconnect();
+            } catch (e) {
+                // Source may have already stopped
+            }
+        });
+        activeSourcesRef.current.clear();
+
         if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
             audioContextRef.current.close();
             audioContextRef.current = null;
         }
         nextStartTimeRef.current = 0;
-        isPlayingRef.current = false;
+        setIsPlaying(false);
     }, []);
 
     return {
         playAudio,
         stop,
-        isPlaying: isPlayingRef.current
+        isPlaying
     };
 }

@@ -15,21 +15,33 @@ export function AssistantScreen() {
     const wsRef = useRef<WebSocket | null>(null);
     const frameIntervalRef = useRef<number | null>(null);
     const isCleanedUpRef = useRef<boolean>(false);  // Guard against StrictMode double-mount
+    const intentionalCloseRef = useRef<boolean>(false);  // Track intentional closes to suppress errors
 
     useEffect(() => {
         if (!user) return;
 
         // Reset cleanup flag on mount
         isCleanedUpRef.current = false;
+        intentionalCloseRef.current = false;
 
-        // If there's already an active WebSocket, don't create a new one
+        // If there's already an active or connecting WebSocket, don't create a new one
         // This handles StrictMode's double-mount behavior
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            console.log('[WebSocket] Already connected, skipping duplicate connection');
-            return;
+        if (wsRef.current) {
+            const state = wsRef.current.readyState;
+            if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) {
+                console.log('[WebSocket] Already connected/connecting, skipping duplicate connection');
+                return;
+            }
+            // If CLOSING, clear the ref and let it reconnect naturally on next render
+            if (state === WebSocket.CLOSING) {
+                console.log('[WebSocket] Previous connection closing, clearing ref');
+                wsRef.current = null;
+                return;
+            }
         }
 
         // Connect WebSocket
+        console.log('[WebSocket] Creating new connection...');
         const ws = new WebSocket(`${BACKEND_WS_URL}/api/assistant/stream`);
         wsRef.current = ws;
 
@@ -37,6 +49,7 @@ export function AssistantScreen() {
             // Check if we've been cleaned up while connecting
             if (isCleanedUpRef.current) {
                 console.log('[WebSocket] Cleaned up during connection, closing');
+                intentionalCloseRef.current = true;
                 ws.close();
                 return;
             }
@@ -85,17 +98,24 @@ export function AssistantScreen() {
         };
 
         ws.onerror = (error) => {
-            console.error('[WebSocket] Connection error:', error);
+            // Only log errors if not intentionally closing (e.g., during StrictMode cleanup)
+            if (!intentionalCloseRef.current && !isCleanedUpRef.current) {
+                console.error('[WebSocket] Connection error:', error);
+            }
             setAiState('listening'); // Reset state on error
         };
 
         ws.onclose = () => {
-            console.log('[WebSocket] Disconnected');
+            // Only log if not intentionally closed
+            if (!intentionalCloseRef.current) {
+                console.log('[WebSocket] Disconnected');
+            }
         };
 
         return () => {
             // Mark as cleaned up to prevent any pending callbacks from executing
             isCleanedUpRef.current = true;
+            intentionalCloseRef.current = true;  // Suppress expected errors during cleanup
 
             // Cleanup
             if (frameIntervalRef.current) {
@@ -103,18 +123,23 @@ export function AssistantScreen() {
                 frameIntervalRef.current = null;
             }
 
-            // Only send close message if connection is OPEN (not CONNECTING)
-            if (ws.readyState === WebSocket.OPEN) {
-                try {
-                    ws.send(JSON.stringify({ type: 'close' }));
-                } catch (e) {
-                    console.warn('[WebSocket] Failed to send close message:', e);
-                }
-            }
-
-            // Close the WebSocket regardless of state
+            // Send close message and close WebSocket safely
             if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-                ws.close();
+                try {
+                    // Only send close message if connection is fully open
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'close' }));
+                    }
+                } catch (e) {
+                    // Suppress - expected during cleanup
+                } finally {
+                    // Always attempt to close the WebSocket
+                    try {
+                        ws.close();
+                    } catch (e) {
+                        // Suppress - expected during cleanup
+                    }
+                }
             }
 
             wsRef.current = null;
