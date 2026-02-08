@@ -16,13 +16,14 @@ This is a **desktop application** built with modern web technologies (Electron +
 
 ## 🧠 Features
 
-- **Facial Recognition Authentication**: Secure login using face embeddings with FaceNet
-- **Emotion Recognition**: Utilizes facial expression analysis and voice tone detection to gauge user emotions
-- **Multimodal Interaction**: Supports voice and video inputs for a comprehensive conversational experience
-- **Contextual Awareness**: Remembers past interactions using LangChain and vector databases
-- **Real-Time Processing**: Immediate feedback during conversations with Gemini 2.0 Flash
-- **Modern Desktop UI**: Electron-based application with glassmorphism design and smooth animations
-- **Auto-Launch Support**: Optionally start with your computer for instant AI companion access
+- **Meet Deva**: A distinct AI personality that remembers you and evolves with conversation
+- **Facial Recognition Authentication**: Secure login using face embeddings (FaceNet)
+- **Multimodal Interaction**: Real-time voice and video processing (Gemini Live API)
+- **Emotional Intelligence**:  Detects emotions from facial expressions and voice tone
+- **Long-term Memory**: Remembers preferences and events using PostgreSQL + pgvector
+- **Agentic Workflow**: Uses **LangGraph** for sequential reasoning and response generation
+- **Modern Desktop UI**: Glassmorphism design with smooth, reactive animations
+- **Privacy First**: Local database processing for user data
 
 ---
 
@@ -31,27 +32,26 @@ This is a **desktop application** built with modern web technologies (Electron +
 ### Frontend (Electron + React)
 - **Desktop Framework**: Electron
 - **UI Framework**: React 18 + TypeScript
-- **Build Tool**: Vite
 - **Styling**: CSS Modules with glassmorphism effects
-- **Media**: WebRTC for camera/microphone access
-- **Real-time**: WebSocket for AI streaming
+- **Media**: Web Audio API & MediaStream (Camera/Mic)
+- **Real-time**: WebSocket for low-latency AI streaming
 
 ### Backend (Python FastAPI)
-- **API Framework**: FastAPI
-- **Facial Detection**: OpenCV, FaceNet-PyTorch (MTCNN)
-- **LLM Agent**: Gemini 2.0 Flash (Multimodal)
-- **LLM Framework**: LangChain (For Personalization)
-- **Database**: PostgreSQL (User data), ChromaDB (Vector DB for memory)
-- **Audio**: sounddevice (Microphone and speaker I/O)
+- **API Framework**: FastAPI (Async)
+- **AI Core**: Google Gemini 2.0 Flash (Live API)
+- **Agent Orchestrator**: **LangGraph** (Reasoning -> Generation flow)
+- **Vision/Auth**: OpenCV, FaceNet-PyTorch
+- **Database**: PostgreSQL (User data + vector embeddings with `pgvector`)
+- **Infrastructure**: Async connection pooling (`asyncpg`)
 
 ---
 
 ## 🔧 Installation
 
 ### Prerequisites
-- **Node.js** 18+ and **npm**
-- **Python** 3.8+
-- **PostgreSQL** databas
+- **Node.js** 22+ and **npm**
+- **Python** 3.12+
+- **PostgreSQL** 13+ (with `vector` extension)
 - Webcam and microphone
 - Windows/Linux/macOS
 
@@ -63,19 +63,23 @@ This is a **desktop application** built with modern web technologies (Electron +
    cd Interactive-Multimodal-AI-Buddy
    ```
 
-2. **Install PostgreSQL**:
-   - Download from [postgresql.org/download](https://www.postgresql.org/download/)
-   - Install with default settings (port 5432)
-   - Create database:
+2. **Database Setup**:
+   - Install PostgreSQL
+   - Create database and enable pgvector:
      ```sql
      CREATE DATABASE multimodal_buddy;
+     \c multimodal_buddy
+     CREATE EXTENSION vector;
      ```
 
 3. **Backend Setup**:
    ```bash
+   # Create virtual environment
    python -m venv .venv
-   .venv\Scripts\activate  # On Windows
-   # source .venv/bin/activate  # On Linux/macOS
+   .venv\Scripts\activate  # Windows
+   # source .venv/bin/activate  # Linux/macOS
+   
+   # Install dependencies
    pip install -r backend/requirements.txt
    ```
 
@@ -87,13 +91,14 @@ This is a **desktop application** built with modern web technologies (Electron +
    ```
 
 5. **Configure environment variables**:
-   
-   Create a `.env` file in the project root:
+   Create a `.env` file in the root directory:
    ```env
-   GEMINI_API_KEY=your_gemini_api_key_here
-   NVIDIA_API_KEY=your_nvidia_api_key_here
+   GEMINI_API_KEY=your_gemini_key
+   NVIDIA_API_KEY=your_nvidia_key (for reasoning node)
+   
+   # Database
    DB_USER=postgres
-   DB_PASSWORD=your_postgres_password
+   DB_PASSWORD=your_password
    DB_NAME=multimodal_buddy
    DB_HOST=localhost
    DB_PORT=5432
@@ -101,30 +106,38 @@ This is a **desktop application** built with modern web technologies (Electron +
 
 6. **Run the application**:
 
-   **Development mode**:
+   **Development (Recommended)**:
    ```bash
    cd frontend
-   npm run dev  # Starts both backend (FastAPI) and frontend (Vite)
+   npm run dev
    ```
-   
-   **Production build**:
+   *Starts FastAPI backend (port 8000) and React frontend (port 5173)*
+
+   **Production Build**:
    ```bash
    cd frontend
-   npm run build:electron  # Creates distributable desktop app
+   npm run build:electron
    ```
 
 ---
 
 ## 📖 Usage
 
-1. **First Time**: Use the **Register** mode to create an account with facial recognition
-2. **Login**: The AI will recognize your face for secure authentication
-3. **Interact**: Speak naturally - the AI responds with voice and maintains conversation context
-4. **Controls**: 
-   - Toggle microphone mute
-   - Toggle camera on/off
-   - Logout to switch users
-5. **Auto-Launch**: Enable in settings to start the app automatically with your computer
+1. **Registration**: 
+   - New users must register with face data.
+   - Look at the camera to capture face embeddings.
+   
+2. **Login**: 
+   - Seamless hands-free login using facial recognition.
+   
+3. **Chat with Deva**: 
+   - Speak naturally! Deva listens and responds with voice.
+   - She sees you through the camera to understand context.
+   
+4. **Controls**:
+   - **Mute/Unmute**: Toggle microphone privacy.
+   - **Camera**: Toggle video input.
+   - **Logout**: Securely end session.
 
 ---
 
@@ -133,29 +146,21 @@ This is a **desktop application** built with modern web technologies (Electron +
 ```
 Interactive-Multimodal-AI-Buddy/
 ├── backend/                 # Python FastAPI backend
-│   ├── ai/                 # AI handlers (Gemini, LangChain)
-│   ├── routes/             # API routes (auth, assistant, media)
-│   ├── utils/              # Utilities (face recognition, database)
-│   ├── main.py             # FastAPI app entry point
-│   ├── models.py           # Pydantic models
-│   ├── config.py           # Configuration
+│   ├── ai/                 # Real-time AI (Gemini Live handler)
+│   ├── graphs/             # LangGraph workflows (Agent logic)
+│   ├── nodes/              # Graph nodes (Reasoning, Generation)
+│   ├── routes/             # API endpoints (Auth, Assistant, Media)
+│   ├── utils/              # Shared utilities (DB, Memory, Face)
+│   ├── main.py             # App entry point & lifespan manager
 │   └── requirements.txt    # Python dependencies
 ├── frontend/               # Electron + React frontend
-│   ├── src/               # React frontend source
-│   │   ├── components/    # React components
-│   │   ├── context/       # State management
-│   │   ├── hooks/         # Custom hooks (camera, mic, audio)
-│   │   ├── types/         # TypeScript types
-│   │   └── main.tsx       # React entry point
-│   ├── electron/          # Electron main process
-│   │   ├── main.ts        # Main process (window, backend spawn)
-│   │   └── preload.ts     # Preload script (IPC bridge)
-│   ├── package.json       # Node.js dependencies
-│   └── vite.config.ts     # Vite configuration
-├── chroma/                 # Vector database storage
-├── .venv/                  # Python virtual environment
-├── .env                    # Environment variables (create this)
-├── .gitignore              # Git ignore rules
+│   ├── src/               
+│   │   ├── components/    # UI Components (AssistantScreen, etc.)
+│   │   ├── hooks/         # Custom hooks (useAudio, useCamera)
+│   │   └── context/       # Global state (User, WebSocket)
+│   └── electron/          # Main process integration
+├── .venv/                  # Virtual environment
+├── .env                    # Config (API Keys, DB)
 └── README.md               # This file
 ```
 
