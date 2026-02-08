@@ -88,7 +88,10 @@ async def assistant_stream(websocket: WebSocket):
         system_instruction = f"""You are Deva, a friendly AI companion talking to {user_name}.
 Be natural, conversational, and empathetic. Remember details the user shares.
 If they mention preferences, events, or personal information, acknowledge it warmly.
-Keep responses concise for natural conversation flow."""
+Keep responses concise for natural conversation flow.
+
+You have vision capabilities - you can see the user through their camera if enabled.
+If you receive video input, you can describe what you see, comment on their expressions, or respond to visual cues."""
         
         # Start Gemini session for live streaming (audio I/O)
         gemini_task = asyncio.create_task(session_state.gemini_handler.start(system_instruction=system_instruction))
@@ -134,9 +137,12 @@ Keep responses concise for natural conversation flow."""
                             nparr = np.frombuffer(image_data, np.uint8)
                             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                             if frame is not None:
+                                logger.debug(f"[WebSocket] Video frame received: {frame.shape}")
                                 await session_state.gemini_handler.send_video(frame)
+                            else:
+                                logger.warning("[WebSocket] Failed to decode video frame")
                         except Exception as e:
-                            logger.error(f"Error processing video: {e}")
+                            logger.error(f"[WebSocket] Error processing video: {e}", exc_info=True)
                     
                     elif msg_type == "text":
                         # Check if this text is likely a transcription of recent audio

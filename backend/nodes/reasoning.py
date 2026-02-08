@@ -3,6 +3,9 @@ from utils.memory import store_knowledge, store_event
 from datetime import datetime, timedelta
 import json
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Initialize Mistral
 # Using the same model config as assistant_orchestrator.py
@@ -47,28 +50,51 @@ async def reasoning_node(state):
         reasoning_context += f". Stored fact: {fact}"
 
     elif "EVENT" in category:
-        # Simple extraction for demo - in production, use structured output or specific prompts for time
+        # Extract event details using Mistral
         extract_prompt = f"""
         Extract event details from: '{input_text}'.
         Return JSON with keys: description, time_offset_minutes (int, estimate).
         Example: {{"description": "Buy milk", "time_offset_minutes": 60}}
         """
+        
+        # Step 1: Get LLM response
         try:
             event_resp = await llm.ainvoke(extract_prompt)
-            # Basic parsing logic (Mistral might output text around JSON)
             content = event_resp.content.strip()
+            logger.info(f"[Reasoning] Mistral response for event: {content}")
+            
+            # Step 2: Parse JSON from response
             start = content.find("{")
             end = content.rfind("}") + 1
-            if start != -1 and end != -1:
-                event_data = json.loads(content[start:end])
-                description = event_data.get("description", "Untitled Event")
-                minutes = event_data.get("time_offset_minutes", 60)
-                event_time = datetime.now() + timedelta(minutes=minutes)
-                
-                await store_event(username, description, event_time)
-                reasoning_context += f". Scheduled: {description} at {event_time}"
-        except Exception as e:
-            reasoning_context += f". Failed to extract event: {e}"
+            
+            if start == -1 or end == -1:
+                logger.warning(f"[Reasoning] No JSON found in Mistral response: {content}")
+                reasoning_context += ". Failed to extract event: No JSON in response"
+            else:
+                try:
+                    event_data = json.loads(content[start:end])
+                    description = event_data.get("description", "Untitled Event")
+                    minutes = event_data.get("time_offset_minutes", 60)
+                    event_time = datetime.now() + timedelta(minutes=minutes)
+                    
+                    logger.info(f"[Reasoning] Parsed event: {description} at {event_time} (in {minutes} min)")
+                    
+                    # Step 3: Store to database
+                    try:
+                        await store_event(username, description, event_time)
+                        logger.info(f"[Reasoning] ✓ Event stored successfully for {username}")
+                        reasoning_context += f". Scheduled: {description} at {event_time.strftime('%I:%M %p')}"
+                    except Exception as db_error:
+                        logger.error(f"[Reasoning] ✗ Database error storing event: {db_error}", exc_info=True)
+                        reasoning_context += f". Failed to save event: Database error"
+                        
+                except json.JSONDecodeError as json_error:
+                    logger.error(f"[Reasoning] ✗ JSON parsing error: {json_error}. Content: {content[start:end]}")
+                    reasoning_context += f". Failed to extract event: Invalid JSON format"
+                    
+        except Exception as llm_error:
+            logger.error(f"[Reasoning] ✗ LLM invocation error: {llm_error}", exc_info=True)
+            reasoning_context += f". Failed to extract event: LLM error"
 
     # Return partial state update
     return {"reasoning_context": reasoning_context}

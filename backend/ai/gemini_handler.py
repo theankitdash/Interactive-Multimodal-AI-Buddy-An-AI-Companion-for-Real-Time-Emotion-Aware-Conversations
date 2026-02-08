@@ -231,15 +231,24 @@ class GeminiHandler:
             # Rate limit: 1 frame per second
             current_time = time.time()
             if not self.session or not self.session_ready.is_set():
+                logger.debug("[Gemini] Cannot send video: session not ready")
                 return
             if (current_time - self.last_frame_time) < 1:
                 return
             
             self.last_frame_time = current_time
-            await self.session.send(input=encode_image(frame))
+            
+            # Encode frame
+            encoded_frame = encode_image(frame)
+            frame_size = len(encoded_frame.get('data', ''))
+            logger.info(f"[Gemini] Sending video frame: {frame.shape}, encoded size: {frame_size} bytes")
+            
+            # Send to Gemini
+            await self.session.send(input=encoded_frame)
+            logger.info("[Gemini] ✓ Video frame sent successfully")
             
         except Exception as e:
-            logger.error(f"[Gemini] Send video error: {e}")
+            logger.error(f"[Gemini] ✗ Send video error: {e}", exc_info=True)
     
     async def get_audio_reply(self):
         """

@@ -16,6 +16,7 @@ async def generation_node(state):
     input_text = state["input_text"]
     username = state["username"]
     chat_history = state.get("chat_history", [])
+    reasoning_context = state.get("reasoning_context", "")
     
     # 1. Retrieve Fast Context
     # (Reasoning node might be too slow, so we do a quick lookup here too if needed, 
@@ -32,7 +33,13 @@ async def generation_node(state):
     # Properly format chat history
     chat_history_str = "\n".join(chat_history[-5:]) if chat_history else "No previous messages"
 
-    # 2. Construct Prompt
+    # 2. Construct Prompt with Reasoning Context
+    # Include what the reasoning node discovered so we can immediately acknowledge facts/events
+    reasoning_section = f"""
+    Recent Context (from reasoning):
+    {reasoning_context}
+    """ if reasoning_context else ""
+    
     system_prompt = f"""
     You are an AI companion. You are talking to {name}.
     
@@ -47,8 +54,9 @@ async def generation_node(state):
     
     Chat History:
     {chat_history_str}
-    
+    {reasoning_section}
     Respond naturally, empathetically, and concisely to the user.
+    If the recent context shows a fact was just stored or an event was scheduled, acknowledge it warmly.
     """
     
     # 3. Generate Content
