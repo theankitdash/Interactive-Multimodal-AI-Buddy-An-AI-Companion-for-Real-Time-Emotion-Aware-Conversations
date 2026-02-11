@@ -1,8 +1,8 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ai.gemini_handler import GeminiHandler
 from graphs.agent_graph import app as agent_graph
-from utils.memory import retrieve_knowledge, get_upcoming_events, store_knowledge, store_event, get_user_profile
-from config import GEMINI_API_KEY, NVIDIA_API_KEY
+from utils.memory import get_user_profile
+from config import GEMINI_API_KEY
 from session_registry import session_registry
 import asyncio
 import numpy as np
@@ -57,7 +57,7 @@ class SessionState:
 async def assistant_stream(websocket: WebSocket):
     """
     WebSocket endpoint for real-time AI assistant interaction.
-    Integrates reasoning (Mistral) and generation (Gemini) pipelines.
+    Integrates reasoning and generation pipelines.
     Handles audio/video streaming bidirectionally with context awareness.
     """
     await websocket.accept()
@@ -85,10 +85,15 @@ async def assistant_stream(websocket: WebSocket):
         # Initialize Gemini handler for real-time audio streaming
         session_state.gemini_handler = GeminiHandler(api_key=GEMINI_API_KEY)
         
-        # CODEC MODE: No system instruction - Gemini is personality-neutral
+        # CODEC MODE WITH VISION: System instruction to enabling seeing
         # All intelligence/memory/personality handled by Cognition Socket (future Phase 2)
-        # Start Gemini session for live streaming (audio I/O only)
-        gemini_task = asyncio.create_task(session_state.gemini_handler.start())
+        # Start Gemini session for live streaming (audio I/O + vision)
+        system_instruction = (
+            "You are a helpful AI assistant. You have vision capabilities and can see the user via their camera. "
+            "If the user asks if you can see them, confirm that you can. "
+            "React naturally to what you see in the video stream."
+        )
+        gemini_task = asyncio.create_task(session_state.gemini_handler.start(system_instruction=system_instruction))
         
         # Store session
         active_sessions[username] = session_state

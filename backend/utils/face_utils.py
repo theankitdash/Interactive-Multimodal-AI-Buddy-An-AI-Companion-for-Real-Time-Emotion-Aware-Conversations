@@ -3,6 +3,10 @@ import torch
 import numpy as np
 from facenet_pytorch import MTCNN, InceptionResnetV1
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # Initialize FaceNet models with error handling
 try:
     mtcnn = MTCNN(
@@ -13,9 +17,9 @@ try:
         post_process=False  # Don't normalize, we'll handle it
     )
     facenet = InceptionResnetV1(pretrained='vggface2').eval()
-    print("[INFO] Face recognition models (MTCNN + FaceNet) loaded successfully")
+    logger.info("[FaceUtils] Face recognition models (MTCNN + FaceNet) loaded successfully")
 except Exception as e:
-    print(f"[ERROR] Failed to load face recognition models: {e}")
+    logger.error(f"[FaceUtils] Failed to load face recognition models: {e}")
     mtcnn = None
     facenet = None
 
@@ -27,13 +31,11 @@ def get_embedding(img_bgr):
         # Convert BGR to RGB for MTCNN
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         
-        print(f"[DEBUG] Image shape: {img_rgb.shape}, dtype: {img_rgb.dtype}")
-        
         # Detect face and get aligned face tensor
         face_tensor = mtcnn(img_rgb)
         
         if face_tensor is None:
-            print("[DEBUG] No face detected by MTCNN")
+            logger.debug("[FaceUtils] No face detected by MTCNN")
             return None
         
         # Get embedding from FaceNet
@@ -46,11 +48,8 @@ def get_embedding(img_bgr):
         # Normalize (strongly recommended)
         embedding = embedding / np.linalg.norm(embedding)
         
-        print(f"[DEBUG] Face embedding extracted successfully, shape: {embedding.shape}")
         return embedding
         
     except Exception as e:
-        print(f"[ERROR] get_embedding failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"[FaceUtils] get_embedding failed: {e}")
         return None

@@ -62,27 +62,42 @@ async def generation_node(state):
     # 3. Generate Content
     # Using raw genai client for text generation
     # Explicitly request TEXT to avoid audio/multipart complexity in this node
-    response = await client.aio.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[
-            {"role": "user", "parts": [{"text": system_prompt + f"\nUser: {input_text}"}]}
-        ],
-        config=types.GenerateContentConfig(
-            response_modalities=["TEXT"]
-        )
-    )
     
-    # Manually extract text to avoid warnings about "thought" or "non-data" parts
-    final_text = ""
-    if response.candidates and response.candidates[0].content.parts:
-        for part in response.candidates[0].content.parts:
-            # Check if likely a thought part (using safe getattr in case of SDK version diffs)
-            is_thought = getattr(part, 'thought', False)
-            if is_thought:
-                continue
-                
-            # Only append if valid text exists content
-            if part.text:
-                final_text += part.text
-                
-    return {"final_response": final_text}
+    # Prepare contents - if images were in state, we would add them here
+    # For now, we just send text, but the model is ready for images
+    prompt_parts = [{"text": system_prompt + f"\nUser: {input_text}"}]
+    
+    # Future Vision Integration:
+    # if "image_data" in state:
+    #     prompt_parts.append({"inline_data": {"mime_type": "image/jpeg", "data": state["image_data"]}})
+
+    try:
+        response = await client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                {"role": "user", "parts": prompt_parts}
+            ],
+            config=types.GenerateContentConfig(
+                response_modalities=["TEXT"]
+            )
+        )
+        
+        # Manually extract text to avoid warnings about "thought" or "non-data" parts
+        final_text = ""
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                # Check if likely a thought part (using safe getattr in case of SDK version diffs)
+                is_thought = getattr(part, 'thought', False)
+                if is_thought:
+                    continue
+                    
+                # Only append if valid text exists content
+                if part.text:
+                    final_text += part.text
+                    
+        return {"final_response": final_text}
+
+    except Exception as e:
+        import logging
+        logging.error(f"Generation Error: {e}")
+        return {"final_response": "I'm having trouble generating a response right now."}

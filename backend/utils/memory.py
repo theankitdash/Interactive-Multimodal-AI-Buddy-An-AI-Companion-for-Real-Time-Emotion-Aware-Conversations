@@ -3,13 +3,14 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 from utils.db_connect import get_pool
-from sentence_transformers import SentenceTransformer
+import google.genai as genai
+import os
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Global embedder (CPU-bound operations will be run in thread pool)
-embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# Initialize Gemini Client for Embeddings
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 async def get_user_profile(username: str) -> Optional[Dict[str, str]]:
     """Fetch basic user details."""
@@ -28,14 +29,17 @@ async def get_user_profile(username: str) -> Optional[Dict[str, str]]:
             return None
 
 async def store_knowledge(username: str, fact: str, category: str = "other") -> None:
-    """Store a fact with vector embedding."""
-    # Run embedder in thread pool to avoid blocking event loop
-    embedding = await asyncio.to_thread(embedder.encode, fact)
-    embedding_list = embedding.tolist()
-    
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        try:
+    """Store a fact with Gemini vector embedding (768 dims)."""
+    try:
+        # Generate embedding using Gemini
+        result = await client.aio.models.embed_content(
+            model="text-embedding-004",
+            contents=fact
+        )
+        embedding_list = result.embeddings[0].values
+        
+        pool = await get_pool()
+        async with pool.acquire() as conn:
             # Check if fact exists to avoid duplicates (optional, based on unique constraint)
             await conn.execute(
                 """
@@ -46,19 +50,25 @@ async def store_knowledge(username: str, fact: str, category: str = "other") -> 
                 """,
                 username, fact, category, embedding_list
             )
-        except Exception as e:
-            logger.error(f"Error storing knowledge: {e}")
-            raise
+            logger.info(f"Stored knowledge for {username}: {fact[:30]}...")
+            
+    except Exception as e:
+        logger.error(f"Error storing knowledge: {e}")
+        # Don't raise, just log error to allow flow to continue
+        pass
 
 async def retrieve_knowledge(username: str, query: str, k: int = 5) -> List[Dict[str, str]]:
-    """Semantic search for relevant user knowledge."""
-    # Run embedder in thread pool to avoid blocking event loop
-    query_emb = await asyncio.to_thread(embedder.encode, query)
-    query_emb_list = query_emb.tolist()
-    
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        try:
+    """Semantic search using Gemini embeddings."""
+    try:
+        # Generate embedding for query
+        result = await client.aio.models.embed_content(
+            model="text-embedding-004",
+            contents=query
+        )
+        query_emb_list = result.embeddings[0].values
+        
+        pool = await get_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT fact, category 
@@ -70,9 +80,10 @@ async def retrieve_knowledge(username: str, query: str, k: int = 5) -> List[Dict
                 username, query_emb_list, k
             )
             return [{"fact": r["fact"], "category": r["category"]} for r in rows]
-        except Exception as e:
-            logger.error(f"Error retrieving knowledge: {e}")
-            return []
+            
+    except Exception as e:
+        logger.error(f"Error retrieving knowledge: {e}")
+        return []
 
 async def store_event(username: str, description: str, event_time: datetime, event_type: str = "task") -> None:
     """Create a new event."""

@@ -13,9 +13,9 @@ export function AssistantScreen() {
     const { playAudio, stop: stopAudio } = useAudio();
 
     // Dual Socket Architecture
-    // Audio Socket - Gemini voice I/O only (codec)
+    // Audio Socket - Gemini 
     const audioWsRef = useRef<WebSocket | null>(null);
-    // Cognition Socket - Mistral reasoning and memory (brain)
+    // Cognition Socket - Reasoning and memory (brain)
     const cognitionWsRef = useRef<WebSocket | null>(null);
 
     const frameIntervalRef = useRef<number | null>(null);
@@ -106,8 +106,8 @@ export function AssistantScreen() {
             }
         };
 
-        // ======== COGNITION SOCKET (Mistral Reasoning) ========
-        console.log('[Cognition Socket] Connecting to Mistral brain...');
+        // ======== COGNITION SOCKET (Reasoning) ========
+        console.log('[Cognition Socket] Connecting to Brain...');
         const cognitionWs = new WebSocket(`${BACKEND_WS_URL}/api/cognition/stream`);
         cognitionWsRef.current = cognitionWs;
 
@@ -118,7 +118,7 @@ export function AssistantScreen() {
                 return;
             }
 
-            console.log('[Cognition Socket] Connected to Mistral');
+            console.log('[Cognition Socket] Connected to Brain');
             cognitionWs.send(JSON.stringify({ username: user.username }));
             setCognitionStatus('connected');
         };

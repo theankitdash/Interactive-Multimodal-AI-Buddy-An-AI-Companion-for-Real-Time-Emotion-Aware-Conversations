@@ -13,6 +13,7 @@ import logging
 from io import BytesIO
 from PIL import Image
 import google.genai as genai
+from google.genai import types
 
 from google.genai.types import (
     LiveConnectConfig,
@@ -103,8 +104,8 @@ class GeminiHandler:
                             voice_name=self.voice_name,
                         )
                     )
-                )
-                # REMOVED: system_instruction - Gemini is now a "dumb" codec
+                ),
+                system_instruction=types.Content(parts=[{"text": system_instruction}]) if system_instruction else None
             )
             
             logger.info(f"[Gemini] Starting live session with voice: {self.voice_name}")
@@ -245,6 +246,7 @@ class GeminiHandler:
                 logger.debug("[Gemini] Cannot send video: session not ready")
                 return
             if (current_time - self.last_frame_time) < 1:
+                logger.debug("[Gemini] Video frame skipped (rate limit)")
                 return
             
             self.last_frame_time = current_time

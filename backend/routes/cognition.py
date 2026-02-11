@@ -2,16 +2,15 @@
 Cognition Socket - Event-based reasoning and memory management
 
 This WebSocket endpoint handles all intelligence, memory, and decision-making.
-Mistral controls the conversation flow; Gemini (Audio Socket) is just voice I/O.
+Gemini Reasoning controls the conversation flow; Gemini (Audio Socket) is just voice I/O.
 
 Architecture:
 - Audio Socket: mic → Gemini → speaker (codec only)
-- Cognition Socket: events → Mistral → memory/decisions (brain)
+- Cognition Socket: events → Gemini Reasoning → memory/decisions (brain)
 """
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from graphs.agent_graph import app as agent_graph
-from utils.memory import retrieve_knowledge, get_upcoming_events, store_knowledge, store_event, get_user_profile
-from config import NVIDIA_API_KEY
+from utils.memory import get_user_profile
 from session_registry import session_registry
 import asyncio
 import json

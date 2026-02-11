@@ -2,6 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -9,15 +14,21 @@ load_dotenv()
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown events."""
     # Startup
+    logger.info("Starting up...")
     try:
         from utils.db_connect import init_pool
         await init_pool()
+        logger.info("Database pool initialized.")
     except Exception as e:
-        print(f"Database initialization warning: {e}")
+        logger.error(f"Database initialization warning: {e}")
+    
+    # Initialize session registry
+    # (No explicit init needed for now, but good placeholder)
     
     yield
     
     # Shutdown
+    logger.info("Shutting down...")
     try:
         from utils.db_connect import close_pool
         await close_pool()
