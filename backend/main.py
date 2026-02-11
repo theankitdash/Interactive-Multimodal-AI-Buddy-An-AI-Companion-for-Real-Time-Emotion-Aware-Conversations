@@ -40,10 +40,11 @@ app.add_middleware(
 )
 
 # Import routes
-from routes import auth, assistant, media
+from routes import auth, assistant, media, cognition
 
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
-app.include_router(assistant.router, prefix="/api/assistant", tags=["Assistant"])
+app.include_router(assistant.router, prefix="/api/assistant", tags=["Assistant - Audio Socket"])
+app.include_router(cognition.router, prefix="/api/cognition", tags=["Cognition - Reasoning Socket"])
 app.include_router(media.router, prefix="/api/media", tags=["Media"])
 
 
@@ -60,3 +61,5 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+
+# cd frontend && npm run dev

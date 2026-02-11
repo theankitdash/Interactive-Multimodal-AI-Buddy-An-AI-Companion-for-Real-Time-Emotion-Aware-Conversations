@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { useCamera } from '../hooks/useCamera';
 import { useMicrophone } from '../hooks/useMicrophone';
@@ -12,144 +12,202 @@ export function AssistantScreen() {
     const { startMicrophone, stopMicrophone } = useMicrophone();
     const { playAudio, stop: stopAudio } = useAudio();
 
-    const wsRef = useRef<WebSocket | null>(null);
+    // Dual Socket Architecture
+    // Audio Socket - Gemini voice I/O only (codec)
+    const audioWsRef = useRef<WebSocket | null>(null);
+    // Cognition Socket - Mistral reasoning and memory (brain)
+    const cognitionWsRef = useRef<WebSocket | null>(null);
+
     const frameIntervalRef = useRef<number | null>(null);
-    const isCleanedUpRef = useRef<boolean>(false);  // Guard against StrictMode double-mount
-    const intentionalCloseRef = useRef<boolean>(false);  // Track intentional closes to suppress errors
+    const isCleanedUpRef = useRef<boolean>(false);
+    const intentionalCloseRef = useRef<boolean>(false);
+    const [cognitionStatus, setCognitionStatus] = useState<string>('disconnected');
 
     useEffect(() => {
         if (!user) return;
 
-        // Reset cleanup flag on mount
+        // Reset cleanup flags
         isCleanedUpRef.current = false;
         intentionalCloseRef.current = false;
 
-        // If there's already an active or connecting WebSocket, don't create a new one
-        // This handles StrictMode's double-mount behavior
-        if (wsRef.current) {
-            const state = wsRef.current.readyState;
-            if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) {
-                console.log('[WebSocket] Already connected/connecting, skipping duplicate connection');
-                return;
-            }
-            // If CLOSING, clear the ref and let it reconnect naturally on next render
-            if (state === WebSocket.CLOSING) {
-                console.log('[WebSocket] Previous connection closing, clearing ref');
-                wsRef.current = null;
+        // Check if sockets are already connected (StrictMode guard)
+        if (audioWsRef.current || cognitionWsRef.current) {
+            const audioState = audioWsRef.current?.readyState;
+            const cognitionState = cognitionWsRef.current?.readyState;
+            if (audioState === WebSocket.OPEN || cognitionState === WebSocket.OPEN) {
+                console.log('[Sockets] Already connected, skipping duplicate');
                 return;
             }
         }
 
-        // Connect WebSocket
-        console.log('[WebSocket] Creating new connection...');
-        const ws = new WebSocket(`${BACKEND_WS_URL}/api/assistant/stream`);
-        wsRef.current = ws;
+        // ======== AUDIO SOCKET (Gemini Voice I/O) ========
+        console.log('[Audio Socket] Connecting to Gemini voice...');
+        const audioWs = new WebSocket(`${BACKEND_WS_URL}/api/assistant/stream`);
+        audioWsRef.current = audioWs;
 
-        ws.onopen = () => {
-            // Check if we've been cleaned up while connecting
+        audioWs.onopen = () => {
             if (isCleanedUpRef.current) {
-                console.log('[WebSocket] Cleaned up during connection, closing');
                 intentionalCloseRef.current = true;
-                ws.close();
+                audioWs.close();
                 return;
             }
 
-            console.log('[WebSocket] Connected');
-            // Send initialization
-            ws.send(JSON.stringify({ username: user.username }));
+            console.log('[Audio Socket] Connected to Gemini');
+            audioWs.send(JSON.stringify({ username: user.username }));
 
-            // Start microphone
+            // Start microphone for audio input
             if (!isMuted) {
                 startMicrophone((audioData) => {
-                    if (ws.readyState === WebSocket.OPEN && !isMuted && !isCleanedUpRef.current) {
+                    if (audioWs.readyState === WebSocket.OPEN && !isMuted && !isCleanedUpRef.current) {
                         const base64 = btoa(String.fromCharCode(...new Uint8Array(audioData.buffer)));
-                        ws.send(JSON.stringify({ type: 'audio', data: base64 }));
+                        audioWs.send(JSON.stringify({ type: 'audio', data: base64 }));
                     }
                 }).catch(console.error);
             }
 
-            // Start sending video frames (1 frame/second) - only if camera is on
+            // Start video frame sending (1 fps)
             frameIntervalRef.current = window.setInterval(async () => {
                 if (isCameraOn && !isCleanedUpRef.current) {
                     const frameData = await captureFrame();
-                    if (frameData && ws.readyState === WebSocket.OPEN) {
+                    if (frameData && audioWs.readyState === WebSocket.OPEN) {
                         const base64Data = frameData.split(',')[1];
-                        ws.send(JSON.stringify({ type: 'video', data: base64Data }));
+                        audioWs.send(JSON.stringify({ type: 'video', data: base64Data }));
                     }
                 }
             }, 1000);
         };
 
-        ws.onmessage = (event) => {
-            // Ignore messages if cleaned up
+        audioWs.onmessage = (event) => {
             if (isCleanedUpRef.current) return;
 
             try {
                 const message = JSON.parse(event.data);
 
+                // Audio Socket only handles audio playback
                 if (message.type === 'audio_reply') {
                     playAudio(message.data, message.sample_rate || 24000);
                     setAiState('speaking');
                     setTimeout(() => setAiState('listening'), 1000);
                 }
             } catch (error) {
-                console.error('[WebSocket] Message error:', error);
+                console.error('[Audio Socket] Message error:', error);
             }
         };
 
-        ws.onerror = (error) => {
-            // Only log errors if not intentionally closing (e.g., during StrictMode cleanup)
-            if (!intentionalCloseRef.current && !isCleanedUpRef.current) {
-                console.error('[WebSocket] Connection error:', error);
-            }
-            setAiState('listening'); // Reset state on error
-        };
-
-        ws.onclose = () => {
-            // Only log if not intentionally closed
+        audioWs.onerror = (error) => {
             if (!intentionalCloseRef.current) {
-                console.log('[WebSocket] Disconnected');
+                console.error('[Audio Socket] Error:', error);
             }
         };
 
-        return () => {
-            // Mark as cleaned up to prevent any pending callbacks from executing
-            isCleanedUpRef.current = true;
-            intentionalCloseRef.current = true;  // Suppress expected errors during cleanup
+        audioWs.onclose = () => {
+            if (!intentionalCloseRef.current) {
+                console.log('[Audio Socket] Disconnected');
+            }
+        };
 
-            // Cleanup
+        // ======== COGNITION SOCKET (Mistral Reasoning) ========
+        console.log('[Cognition Socket] Connecting to Mistral brain...');
+        const cognitionWs = new WebSocket(`${BACKEND_WS_URL}/api/cognition/stream`);
+        cognitionWsRef.current = cognitionWs;
+
+        cognitionWs.onopen = () => {
+            if (isCleanedUpRef.current) {
+                intentionalCloseRef.current = true;
+                cognitionWs.close();
+                return;
+            }
+
+            console.log('[Cognition Socket] Connected to Mistral');
+            cognitionWs.send(JSON.stringify({ username: user.username }));
+            setCognitionStatus('connected');
+        };
+
+        cognitionWs.onmessage = (event) => {
+            if (isCleanedUpRef.current) return;
+
+            try {
+                const message = JSON.parse(event.data);
+
+                if (message.event === 'reasoning_complete') {
+                    // Reasoning happened, update UI state
+                    console.log('[Cognition] Reasoning:', message.context);
+                    setAiState('thinking');
+                    setTimeout(() => setAiState('listening'), 800);
+                }
+
+                else if (message.event === 'memory_stored') {
+                    console.log('[Cognition] Memory stored:', message.content);
+                }
+
+                else if (message.event === 'state_update') {
+                    if (message.state) {
+                        setAiState(message.state);
+                    }
+                }
+            } catch (error) {
+                console.error('[Cognition Socket] Message error:', error);
+            }
+        };
+
+        cognitionWs.onerror = (error) => {
+            if (!intentionalCloseRef.current) {
+                console.error('[Cognition Socket] Error:', error);
+            }
+            setCognitionStatus('error');
+        };
+
+        cognitionWs.onclose = () => {
+            if (!intentionalCloseRef.current) {
+                console.log('[Cognition Socket] Disconnected');
+            }
+            setCognitionStatus('disconnected');
+        };
+
+        // Cleanup function
+        return () => {
+            isCleanedUpRef.current = true;
+            intentionalCloseRef.current = true;
+
+            // Clear frame interval
             if (frameIntervalRef.current) {
                 clearInterval(frameIntervalRef.current);
                 frameIntervalRef.current = null;
             }
 
-            // Send close message and close WebSocket safely
-            if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            // Close Audio Socket
+            if (audioWs.readyState === WebSocket.OPEN || audioWs.readyState === WebSocket.CONNECTING) {
                 try {
-                    // Only send close message if connection is fully open
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: 'close' }));
+                    if (audioWs.readyState === WebSocket.OPEN) {
+                        audioWs.send(JSON.stringify({ type: 'close' }));
                     }
+                    audioWs.close();
                 } catch (e) {
-                    // Suppress - expected during cleanup
-                } finally {
-                    // Always attempt to close the WebSocket
-                    try {
-                        ws.close();
-                    } catch (e) {
-                        // Suppress - expected during cleanup
-                    }
+                    // Suppress
                 }
             }
 
-            wsRef.current = null;
+            // Close Cognition Socket
+            if (cognitionWs.readyState === WebSocket.OPEN || cognitionWs.readyState === WebSocket.CONNECTING) {
+                try {
+                    if (cognitionWs.readyState === WebSocket.OPEN) {
+                        cognitionWs.send(JSON.stringify({ event: 'close' }));
+                    }
+                    cognitionWs.close();
+                } catch (e) {
+                    // Suppress
+                }
+            }
+
+            audioWsRef.current = null;
+            cognitionWsRef.current = null;
             stopMicrophone();
             stopCamera();
             stopAudio();
         };
     }, [user]);
 
-    // Handle camera toggle - start/stop camera when toggled
+    // Handle camera toggle
     useEffect(() => {
         if (isCameraOn) {
             startCamera().catch(console.error);
@@ -162,20 +220,24 @@ export function AssistantScreen() {
     useEffect(() => {
         if (isMuted) {
             stopMicrophone();
-        } else if (wsRef.current?.readyState === WebSocket.OPEN) {
+        } else if (audioWsRef.current?.readyState === WebSocket.OPEN) {
             startMicrophone((audioData) => {
-                if (wsRef.current?.readyState === WebSocket.OPEN && !isMuted) {
+                if (audioWsRef.current?.readyState === WebSocket.OPEN && !isMuted) {
                     const base64 = btoa(String.fromCharCode(...new Uint8Array(audioData.buffer)));
-                    wsRef.current.send(JSON.stringify({ type: 'audio', data: base64 }));
+                    audioWsRef.current.send(JSON.stringify({ type: 'audio', data: base64 }));
                 }
             }).catch(console.error);
         }
     }, [isMuted]);
 
     const handleLogout = () => {
-        if (wsRef.current) {
-            wsRef.current.send(JSON.stringify({ type: 'close' }));
-            wsRef.current.close();
+        if (audioWsRef.current) {
+            audioWsRef.current.send(JSON.stringify({ type: 'close' }));
+            audioWsRef.current.close();
+        }
+        if (cognitionWsRef.current) {
+            cognitionWsRef.current.send(JSON.stringify({ event: 'close' }));
+            cognitionWsRef.current.close();
         }
         setMode('login');
     };
@@ -212,6 +274,13 @@ export function AssistantScreen() {
                     style={{ backgroundColor: getStateColor() }}
                 />
                 <p className={styles.aiStateLabel}>{aiState.charAt(0).toUpperCase() + aiState.slice(1)}</p>
+
+                {/* Debug: Show cognition status */}
+                {cognitionStatus !== 'connected' && (
+                    <p style={{ fontSize: '10px', color: '#ff6b6b', marginTop: '4px' }}>
+                        Cognition: {cognitionStatus}
+                    </p>
+                )}
 
                 {/* Media controls */}
                 <div className={styles.mediaControls}>

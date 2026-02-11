@@ -68,7 +68,8 @@ class GeminiHandler:
         self.session = None
         self.input_queue: asyncio.Queue = asyncio.Queue()
         self.output_queue: asyncio.Queue = asyncio.Queue()
-        self.transcription_queue: asyncio.Queue = asyncio.Queue()  # User input transcriptions for Mistral
+        self.transcription_queue: asyncio.Queue = asyncio.Queue()  # User input transcriptions
+        self.event_queue: asyncio.Queue = asyncio.Queue()  # Events for Cognition Socket
         self.quit: asyncio.Event = asyncio.Event()
         self.session_ready: asyncio.Event = asyncio.Event()
         self.last_frame_time = 0
@@ -85,10 +86,15 @@ class GeminiHandler:
         """
         Start the Gemini Live session and begin audio streaming.
         
+        NOTE: System instruction is intentionally minimal/None for codec-only mode.
+        Intelligence/personality handled by Cognition Socket (Mistral).
+        
         Args:
-            system_instruction: Optional system prompt for Gemini
+            system_instruction: Optional system prompt (ignored in codec mode)
         """
         try:
+            # CODEC MODE: No system instruction, personality-neutral
+            # All intelligence comes from Cognition Socket (Mistral)
             config = LiveConnectConfig(
                 response_modalities=["AUDIO"],  # Audio-only responses
                 speech_config=SpeechConfig(
@@ -97,8 +103,8 @@ class GeminiHandler:
                             voice_name=self.voice_name,
                         )
                     )
-                ),
-                system_instruction={"parts": [{"text": system_instruction}]} if system_instruction else None
+                )
+                # REMOVED: system_instruction - Gemini is now a "dumb" codec
             )
             
             logger.info(f"[Gemini] Starting live session with voice: {self.voice_name}")
@@ -161,6 +167,11 @@ class GeminiHandler:
                         # Check for turn completion to reset speaking flag
                         if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
                             self._is_model_speaking = False
+                            # Emit end-of-utterance event for Cognition Socket
+                            await self.event_queue.put({
+                                "event": "end_of_utterance",
+                                "timestamp": time.time()
+                            })
                 
                 except asyncio.CancelledError:
                     logger.info("[Gemini] Stream cancelled")

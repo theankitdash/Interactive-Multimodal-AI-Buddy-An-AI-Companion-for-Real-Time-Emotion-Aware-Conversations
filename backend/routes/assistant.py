@@ -3,11 +3,13 @@ from ai.gemini_handler import GeminiHandler
 from graphs.agent_graph import app as agent_graph
 from utils.memory import retrieve_knowledge, get_upcoming_events, store_knowledge, store_event, get_user_profile
 from config import GEMINI_API_KEY, NVIDIA_API_KEY
+from session_registry import session_registry
 import asyncio
 import numpy as np
 import json
 import base64
 import logging
+import time
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -83,21 +85,16 @@ async def assistant_stream(websocket: WebSocket):
         # Initialize Gemini handler for real-time audio streaming
         session_state.gemini_handler = GeminiHandler(api_key=GEMINI_API_KEY)
         
-        # Build system instruction with user context
-        user_name = session_state.user_profile.get('name', username)
-        system_instruction = f"""You are Deva, a friendly AI companion talking to {user_name}.
-Be natural, conversational, and empathetic. Remember details the user shares.
-If they mention preferences, events, or personal information, acknowledge it warmly.
-Keep responses concise for natural conversation flow.
-
-You have vision capabilities - you can see the user through their camera if enabled.
-If you receive video input, you can describe what you see, comment on their expressions, or respond to visual cues."""
-        
-        # Start Gemini session for live streaming (audio I/O)
-        gemini_task = asyncio.create_task(session_state.gemini_handler.start(system_instruction=system_instruction))
+        # CODEC MODE: No system instruction - Gemini is personality-neutral
+        # All intelligence/memory/personality handled by Cognition Socket (future Phase 2)
+        # Start Gemini session for live streaming (audio I/O only)
+        gemini_task = asyncio.create_task(session_state.gemini_handler.start())
         
         # Store session
         active_sessions[username] = session_state
+        
+        # Register in session registry for inter-socket communication
+        await session_registry.register_audio_socket(username, session_state, websocket)
         
         logger.info(f"[WebSocket] User {username} connected. Profile: {session_state.user_profile}")
         await websocket.send_json({
@@ -191,50 +188,34 @@ If you receive video input, you can describe what you see, comment on their expr
             except Exception as e:
                 logger.error(f"[WebSocket Send Error] {e}")
 
-        # Transcription processing - processes USER input transcriptions for fact/event extraction
-        # Only processes what the USER said, NOT what Gemini said
-        async def process_transcriptions():
-            """
-            Process USER input transcriptions through Mistral reasoning.
-            This captures what the USER said and extracts facts/events for storage.
-            NOTE: Only user transcriptions are queued, not model output.
-            """
-            last_process_time = 0
-            min_interval = 2.0  # Minimum seconds between processing
-            
+        # Forward transcriptions from Gemini to Cognition Socket
+        async def forward_transcriptions():
+            """Poll transcription queue and forward to Cognition Socket"""
             try:
                 while True:
-                    # Check if model is currently speaking - skip processing during responses
-                    if session_state.gemini_handler._is_model_speaking:
-                        await asyncio.sleep(0.2)
-                        continue
-                    
+                    # Get transcription from Gemini
                     transcription = await session_state.gemini_handler.get_transcription()
                     if transcription:
-                        current_time = asyncio.get_event_loop().time()
+                        logger.info(f"[Audio Socket] Forwarding transcription to Cognition: {transcription[:100]}")
                         
-                        # Debounce: skip if processed too recently
-                        if (current_time - last_process_time) < min_interval:
-                            logger.debug(f"[Transcription] Skipping due to debounce: {transcription[:50]}")
-                            continue
-                        
-                        logger.info(f"[Transcription] Processing USER input: {transcription[:100]}")
-                        last_process_time = current_time
-                        
-                        # Run reasoning on user transcription (silent mode - no text response)
-                        # This extracts facts/events without generating a competing response
-                        await process_user_text(session_state, transcription, silent=True)
+                        # Forward to Cognition Socket via registry
+                        await session_registry.forward_to_cognition(username, {
+                            "event": "transcription",
+                            "text": transcription,
+                            "source": "gemini_audio",
+                            "timestamp": time.time()
+                        })
                     
-                    await asyncio.sleep(0.1)  # Check periodically
-            
+                    await asyncio.sleep(0.1)  # Poll interval
             except Exception as e:
-                logger.error(f"[Transcription Processing Error] {e}")
+                logger.error(f"[Audio Socket] Transcription forwarding error: {e}")
 
-        # Run audio communication tasks ONLY (simplified for debugging)
+        # AUDIO SOCKET: Audio I/O + transcription forwarding
+        # No local reasoning - all intelligence delegated to Cognition Socket
         await asyncio.gather(
             receive_from_client(),
             send_to_client(),
-            process_transcriptions(),  
+            forward_transcriptions(),  # Forward transcriptions to Cognition Socket
             return_exceptions=True
         )
     
@@ -250,6 +231,9 @@ If you receive video input, you can describe what you see, comment on their expr
         # Cleanup
         if session_state:
             try:
+                # Unregister from session registry
+                await session_registry.unregister_audio_socket(session_state.username)
+                
                 await session_state.cleanup()
                 if session_state.session_id in active_sessions:
                     del active_sessions[session_state.session_id]
