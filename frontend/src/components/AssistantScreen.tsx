@@ -30,142 +30,146 @@ export function AssistantScreen() {
         isCleanedUpRef.current = false;
         intentionalCloseRef.current = false;
 
-        // Check if sockets are already connected (StrictMode guard)
-        if (audioWsRef.current || cognitionWsRef.current) {
-            const audioState = audioWsRef.current?.readyState;
-            const cognitionState = cognitionWsRef.current?.readyState;
-            if (audioState === WebSocket.OPEN || cognitionState === WebSocket.OPEN) {
-                console.log('[Sockets] Already connected, skipping duplicate');
-                return;
-            }
+        // Delay connection to survive React StrictMode double-mount.
+        // In dev mode, React mounts → unmounts → remounts. The 50ms delay
+        // ensures the first mount's cleanup fires before sockets are created.
+        let aborted = false;
+        const connectTimer = setTimeout(() => {
+            if (aborted) return;
+            connectSockets();
+        }, 50);
+
+        function connectSockets() {
+            // ======== AUDIO SOCKET (Gemini Voice I/O) ========
+            console.log('[Audio Socket] Connecting to Gemini voice...');
+            const audioWs = new WebSocket(`${BACKEND_WS_URL}/api/assistant/stream`);
+            audioWsRef.current = audioWs;
+
+            audioWs.onopen = () => {
+                if (isCleanedUpRef.current) {
+                    intentionalCloseRef.current = true;
+                    audioWs.close();
+                    return;
+                }
+
+                console.log('[Audio Socket] Connected to Gemini');
+                if (!user) return;
+                audioWs.send(JSON.stringify({ username: user.username }));
+
+                // Start microphone for audio input
+                if (!isMuted) {
+                    startMicrophone((audioData) => {
+                        if (audioWs.readyState === WebSocket.OPEN && !isMuted && !isCleanedUpRef.current) {
+                            const base64 = btoa(String.fromCharCode(...new Uint8Array(audioData.buffer)));
+                            audioWs.send(JSON.stringify({ type: 'audio', data: base64 }));
+                        }
+                    }).catch(console.error);
+                }
+
+                // Start video frame sending (1 fps)
+                frameIntervalRef.current = window.setInterval(async () => {
+                    if (isCameraOn && !isCleanedUpRef.current) {
+                        const frameData = await captureFrame();
+                        if (frameData && audioWs.readyState === WebSocket.OPEN) {
+                            const base64Data = frameData.split(',')[1];
+                            audioWs.send(JSON.stringify({ type: 'video', data: base64Data }));
+                        }
+                    }
+                }, 1000);
+            };
+
+            audioWs.onmessage = (event) => {
+                if (isCleanedUpRef.current) return;
+
+                try {
+                    const message = JSON.parse(event.data);
+
+                    // Audio Socket only handles audio playback
+                    if (message.type === 'audio_reply') {
+                        playAudio(message.data, message.sample_rate || 24000);
+                        setAiState('speaking');
+                        setTimeout(() => setAiState('listening'), 1000);
+                    }
+                } catch (error) {
+                    console.error('[Audio Socket] Message error:', error);
+                }
+            };
+
+            audioWs.onerror = (error) => {
+                if (!intentionalCloseRef.current) {
+                    console.error('[Audio Socket] Error:', error);
+                }
+            };
+
+            audioWs.onclose = () => {
+                if (!intentionalCloseRef.current) {
+                    console.log('[Audio Socket] Disconnected');
+                }
+            };
+
+            // ======== COGNITION SOCKET (Reasoning) ========
+            console.log('[Cognition Socket] Connecting to Brain...');
+            const cognitionWs = new WebSocket(`${BACKEND_WS_URL}/api/cognition/stream`);
+            cognitionWsRef.current = cognitionWs;
+
+            cognitionWs.onopen = () => {
+                if (isCleanedUpRef.current) {
+                    intentionalCloseRef.current = true;
+                    cognitionWs.close();
+                    return;
+                }
+
+                console.log('[Cognition Socket] Connected to Brain');
+                if (!user) return;
+                cognitionWs.send(JSON.stringify({ username: user.username }));
+                setCognitionStatus('connected');
+            };
+
+            cognitionWs.onmessage = (event) => {
+                if (isCleanedUpRef.current) return;
+
+                try {
+                    const message = JSON.parse(event.data);
+
+                    if (message.event === 'reasoning_complete') {
+                        console.log('[Cognition] Reasoning:', message.context);
+                        setAiState('thinking');
+                        setTimeout(() => setAiState('listening'), 800);
+                    }
+
+                    else if (message.event === 'memory_stored') {
+                        console.log('[Cognition] Memory stored:', message.content);
+                    }
+
+                    else if (message.event === 'state_update') {
+                        if (message.state) {
+                            setAiState(message.state);
+                        }
+                    }
+                } catch (error) {
+                    console.error('[Cognition Socket] Message error:', error);
+                }
+            };
+
+            cognitionWs.onerror = (error) => {
+                if (!intentionalCloseRef.current) {
+                    console.error('[Cognition Socket] Error:', error);
+                }
+                setCognitionStatus('error');
+            };
+
+            cognitionWs.onclose = () => {
+                if (!intentionalCloseRef.current) {
+                    console.log('[Cognition Socket] Disconnected');
+                }
+                setCognitionStatus('disconnected');
+            };
         }
-
-        // ======== AUDIO SOCKET (Gemini Voice I/O) ========
-        console.log('[Audio Socket] Connecting to Gemini voice...');
-        const audioWs = new WebSocket(`${BACKEND_WS_URL}/api/assistant/stream`);
-        audioWsRef.current = audioWs;
-
-        audioWs.onopen = () => {
-            if (isCleanedUpRef.current) {
-                intentionalCloseRef.current = true;
-                audioWs.close();
-                return;
-            }
-
-            console.log('[Audio Socket] Connected to Gemini');
-            audioWs.send(JSON.stringify({ username: user.username }));
-
-            // Start microphone for audio input
-            if (!isMuted) {
-                startMicrophone((audioData) => {
-                    if (audioWs.readyState === WebSocket.OPEN && !isMuted && !isCleanedUpRef.current) {
-                        const base64 = btoa(String.fromCharCode(...new Uint8Array(audioData.buffer)));
-                        audioWs.send(JSON.stringify({ type: 'audio', data: base64 }));
-                    }
-                }).catch(console.error);
-            }
-
-            // Start video frame sending (1 fps)
-            frameIntervalRef.current = window.setInterval(async () => {
-                if (isCameraOn && !isCleanedUpRef.current) {
-                    const frameData = await captureFrame();
-                    if (frameData && audioWs.readyState === WebSocket.OPEN) {
-                        const base64Data = frameData.split(',')[1];
-                        audioWs.send(JSON.stringify({ type: 'video', data: base64Data }));
-                    }
-                }
-            }, 1000);
-        };
-
-        audioWs.onmessage = (event) => {
-            if (isCleanedUpRef.current) return;
-
-            try {
-                const message = JSON.parse(event.data);
-
-                // Audio Socket only handles audio playback
-                if (message.type === 'audio_reply') {
-                    playAudio(message.data, message.sample_rate || 24000);
-                    setAiState('speaking');
-                    setTimeout(() => setAiState('listening'), 1000);
-                }
-            } catch (error) {
-                console.error('[Audio Socket] Message error:', error);
-            }
-        };
-
-        audioWs.onerror = (error) => {
-            if (!intentionalCloseRef.current) {
-                console.error('[Audio Socket] Error:', error);
-            }
-        };
-
-        audioWs.onclose = () => {
-            if (!intentionalCloseRef.current) {
-                console.log('[Audio Socket] Disconnected');
-            }
-        };
-
-        // ======== COGNITION SOCKET (Reasoning) ========
-        console.log('[Cognition Socket] Connecting to Brain...');
-        const cognitionWs = new WebSocket(`${BACKEND_WS_URL}/api/cognition/stream`);
-        cognitionWsRef.current = cognitionWs;
-
-        cognitionWs.onopen = () => {
-            if (isCleanedUpRef.current) {
-                intentionalCloseRef.current = true;
-                cognitionWs.close();
-                return;
-            }
-
-            console.log('[Cognition Socket] Connected to Brain');
-            cognitionWs.send(JSON.stringify({ username: user.username }));
-            setCognitionStatus('connected');
-        };
-
-        cognitionWs.onmessage = (event) => {
-            if (isCleanedUpRef.current) return;
-
-            try {
-                const message = JSON.parse(event.data);
-
-                if (message.event === 'reasoning_complete') {
-                    // Reasoning happened, update UI state
-                    console.log('[Cognition] Reasoning:', message.context);
-                    setAiState('thinking');
-                    setTimeout(() => setAiState('listening'), 800);
-                }
-
-                else if (message.event === 'memory_stored') {
-                    console.log('[Cognition] Memory stored:', message.content);
-                }
-
-                else if (message.event === 'state_update') {
-                    if (message.state) {
-                        setAiState(message.state);
-                    }
-                }
-            } catch (error) {
-                console.error('[Cognition Socket] Message error:', error);
-            }
-        };
-
-        cognitionWs.onerror = (error) => {
-            if (!intentionalCloseRef.current) {
-                console.error('[Cognition Socket] Error:', error);
-            }
-            setCognitionStatus('error');
-        };
-
-        cognitionWs.onclose = () => {
-            if (!intentionalCloseRef.current) {
-                console.log('[Cognition Socket] Disconnected');
-            }
-            setCognitionStatus('disconnected');
-        };
 
         // Cleanup function
         return () => {
+            aborted = true;
+            clearTimeout(connectTimer);
             isCleanedUpRef.current = true;
             intentionalCloseRef.current = true;
 
@@ -176,7 +180,8 @@ export function AssistantScreen() {
             }
 
             // Close Audio Socket
-            if (audioWs.readyState === WebSocket.OPEN || audioWs.readyState === WebSocket.CONNECTING) {
+            const audioWs = audioWsRef.current;
+            if (audioWs && (audioWs.readyState === WebSocket.OPEN || audioWs.readyState === WebSocket.CONNECTING)) {
                 try {
                     if (audioWs.readyState === WebSocket.OPEN) {
                         audioWs.send(JSON.stringify({ type: 'close' }));
@@ -188,7 +193,8 @@ export function AssistantScreen() {
             }
 
             // Close Cognition Socket
-            if (cognitionWs.readyState === WebSocket.OPEN || cognitionWs.readyState === WebSocket.CONNECTING) {
+            const cognitionWs = cognitionWsRef.current;
+            if (cognitionWs && (cognitionWs.readyState === WebSocket.OPEN || cognitionWs.readyState === WebSocket.CONNECTING)) {
                 try {
                     if (cognitionWs.readyState === WebSocket.OPEN) {
                         cognitionWs.send(JSON.stringify({ event: 'close' }));
@@ -207,12 +213,23 @@ export function AssistantScreen() {
         };
     }, [user]);
 
-    // Handle camera toggle
+    // Handle camera toggle — send state to backend
     useEffect(() => {
         if (isCameraOn) {
-            startCamera().catch(console.error);
+            startCamera().then(() => {
+                // Notify backend that camera is now on
+                if (audioWsRef.current?.readyState === WebSocket.OPEN) {
+                    audioWsRef.current.send(JSON.stringify({ type: 'camera_on' }));
+                    console.log('[Camera] Sent camera_on to backend');
+                }
+            }).catch(console.error);
         } else {
             stopCamera();
+            // Notify backend that camera is now off
+            if (audioWsRef.current?.readyState === WebSocket.OPEN) {
+                audioWsRef.current.send(JSON.stringify({ type: 'camera_off' }));
+                console.log('[Camera] Sent camera_off to backend');
+            }
         }
     }, [isCameraOn]);
 
@@ -231,11 +248,12 @@ export function AssistantScreen() {
     }, [isMuted]);
 
     const handleLogout = () => {
-        if (audioWsRef.current) {
+        // Guard: check readyState before sending
+        if (audioWsRef.current?.readyState === WebSocket.OPEN) {
             audioWsRef.current.send(JSON.stringify({ type: 'close' }));
             audioWsRef.current.close();
         }
-        if (cognitionWsRef.current) {
+        if (cognitionWsRef.current?.readyState === WebSocket.OPEN) {
             cognitionWsRef.current.send(JSON.stringify({ event: 'close' }));
             cognitionWsRef.current.close();
         }

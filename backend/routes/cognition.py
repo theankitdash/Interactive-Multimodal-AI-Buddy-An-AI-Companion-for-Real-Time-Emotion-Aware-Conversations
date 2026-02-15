@@ -34,6 +34,10 @@ class CognitionState:
         self.websocket = None
         self.last_processing_time = 0
         self.processing_lock = asyncio.Lock()
+        # Transcription batching: accumulate fragments before processing
+        self._transcription_buffer: list[str] = []
+        self._debounce_task: asyncio.Task | None = None
+        self._debounce_delay = 1.5  # seconds to wait for more fragments
         
     async def initialize_user_context(self):
         """Load user profile and context"""
@@ -195,16 +199,47 @@ async def process_utterance(session_state: CognitionState, event_data: dict):
 
 async def process_transcription(session_state: CognitionState, transcription: str, event_data: dict):
     """
-    Process transcription through Mistral reasoning pipeline.
-    Extract facts, events, emotions, and update memory.
+    Buffer transcription fragments and process once the user stops speaking.
+    Gemini sends partial transcriptions ('Do', 'you', 'know the time...'),
+    so we accumulate them with a 1.5s debounce before triggering Mistral.
     """
+    # Add fragment to buffer
+    session_state._transcription_buffer.append(transcription)
+    logger.debug(f"[Cognition] Buffered fragment: '{transcription}' (buffer size: {len(session_state._transcription_buffer)})")
+
+    # Cancel any existing debounce timer
+    if session_state._debounce_task and not session_state._debounce_task.done():
+        session_state._debounce_task.cancel()
+
+    # Start a new debounce timer — flush only after silence
+    session_state._debounce_task = asyncio.create_task(
+        _flush_transcription_buffer(session_state, event_data)
+    )
+
+
+async def _flush_transcription_buffer(session_state: CognitionState, event_data: dict):
+    """Wait for debounce delay, then process the accumulated transcription."""
+    try:
+        await asyncio.sleep(session_state._debounce_delay)
+    except asyncio.CancelledError:
+        return  # New fragment arrived, timer reset
+
+    # Combine all buffered fragments into one sentence
+    full_text = " ".join(session_state._transcription_buffer).strip()
+    session_state._transcription_buffer.clear()
+
+    if not full_text:
+        return
+
+    logger.info(f"[Cognition] Processing full transcription: {full_text[:150]}")
+
     try:
         # Add to history
-        session_state.add_to_history("user", transcription)
+        session_state.add_to_history("user", full_text)
         
         # Prepare state for agent graph
         agent_state = {
-            "input_text": transcription,
+            "input_text": full_text,
             "username": session_state.username,
             "chat_history": session_state.chat_history,
             "user_profile": session_state.user_profile,
@@ -219,23 +254,25 @@ async def process_transcription(session_state: CognitionState, transcription: st
         reasoning_context = result.get("reasoning_context", "")
         
         # Send reasoning results to frontend
-        await session_state.websocket.send_json({
-            "event": "reasoning_complete",
-            "context": reasoning_context,
-            "timestamp": event_data.get("timestamp", time.time())
-        })
+        if session_state.websocket:
+            await session_state.websocket.send_json({
+                "event": "reasoning_complete",
+                "context": reasoning_context,
+                "timestamp": event_data.get("timestamp", time.time())
+            })
         
         logger.info(f"[Cognition] Reasoning complete: {reasoning_context[:100]}")
         
-        # Note: Audio Socket (Gemini) handles actual voice response
-        # We just store facts/events and provide context
-        
     except Exception as e:
         logger.error(f"[Cognition] Transcription processing error: {e}")
-        await session_state.websocket.send_json({
-            "event": "error",
-            "error": f"Processing error: {str(e)}"
-        })
+        try:
+            if session_state.websocket:
+                await session_state.websocket.send_json({
+                    "event": "error",
+                    "error": f"Processing error: {str(e)}"
+                })
+        except Exception:
+            pass
 
 
 async def process_emotion(session_state: CognitionState, event_data: dict):

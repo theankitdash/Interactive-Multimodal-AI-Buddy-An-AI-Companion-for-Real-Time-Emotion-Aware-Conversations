@@ -14,6 +14,7 @@ Usage:
     cognition = session_registry.get_cognition_socket(username)
 """
 import asyncio
+import json
 import logging
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
@@ -111,20 +112,28 @@ class SessionRegistry:
     async def forward_to_cognition(self, username: str, event: dict):
         """
         Forward an event from Audio Socket to Cognition Socket.
-        Used primarily for transcription events.
+        Directly invokes process_transcription on the cognition session
+        rather than sending through the WebSocket (which would just echo to the frontend).
         """
-        cognition_ws = self.get_cognition_websocket(username)
-        if cognition_ws:
-            try:
-                import json
-                await cognition_ws.send_text(json.dumps(event))
-                logger.debug(f"[Registry] Forwarded event to Cognition Socket: {event.get('event')}")
+        pair = self._sessions.get(username)
+        if not pair or not pair.cognition_session:
+            logger.warning(f"[Registry] No Cognition session for {username}")
+            return False
+
+        try:
+            # Import here to avoid circular imports
+            from routes.cognition import process_transcription
+
+            transcription = event.get("text", "")
+            if transcription:
+                await process_transcription(pair.cognition_session, transcription, event)
+                logger.info(f"[Registry] Processed transcription via Cognition: {transcription[:80]}")
                 return True
-            except Exception as e:
-                logger.error(f"[Registry] Failed to forward to Cognition: {e}")
+            else:
+                logger.warning(f"[Registry] Empty transcription in forwarded event")
                 return False
-        else:
-            logger.warning(f"[Registry] No Cognition Socket for {username}")
+        except Exception as e:
+            logger.error(f"[Registry] Failed to process transcription: {e}")
             return False
     
     async def send_to_audio(self, username: str, command: dict):
@@ -135,7 +144,6 @@ class SessionRegistry:
         audio_ws = self.get_audio_websocket(username)
         if audio_ws:
             try:
-                import json
                 await audio_ws.send_text(json.dumps(command))
                 logger.debug(f"[Registry] Sent command to Audio Socket: {command.get('command')}")
                 return True

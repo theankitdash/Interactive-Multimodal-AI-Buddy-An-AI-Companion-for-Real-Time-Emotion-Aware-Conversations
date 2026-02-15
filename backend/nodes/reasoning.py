@@ -1,61 +1,60 @@
-import google.genai as genai
-from google.genai import types
-from utils.memory import store_knowledge, store_event
-from datetime import datetime, timedelta
-import json
-import os
 import logging
-from config import GEMINI_MODEL
+import json
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from langchain_core.messages import HumanMessage
+from utils.memory import store_knowledge, store_event
+from datetime import datetime, timedelta, timezone
+from config import NVIDIA_API_KEY, NVIDIA_MODEL, NVIDIA_TEMPERATURE, NVIDIA_TOP_P, NVIDIA_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini Client for Reasoning
-# Using the same client/model as generation to unify the stack
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Initialize Mistral Client via NVIDIA AI Endpoints
+client = ChatNVIDIA(
+    model=NVIDIA_MODEL,
+    api_key=NVIDIA_API_KEY,
+    temperature=NVIDIA_TEMPERATURE,
+    top_p=NVIDIA_TOP_P,
+    max_tokens=NVIDIA_MAX_TOKENS,
+)
 
 async def reasoning_node(state):
     """
-    Analyzes input text for facts or events using Gemini.
+    Analyzes input text for facts or events using Mistral.
     Executes before generation in sequential flow.
     """
     input_text = state["input_text"]
     username = state["username"]
     
     # 1. Classify Intent & Extract Info (Single Step for Speed)
-    # Gemini Flash is fast enough to do classification and extraction in one prompt
-    prompt = f"""
-    Analyze the following user input: "{input_text}"
+    prompt = f"""Analyze the following user input: "{input_text}"
     
     Task:
     1. Classify intent into ONE category: FACT, EVENT, CHAT.
     2. IF FACT: Extract the core fact (e.g., "I like pizza" -> "User likes pizza").
     3. IF EVENT: Extract description and estimated time offset in minutes from now.
     
-    Return JSON ONLY:
+    Return JSON ONLY, no extra text:
     {{
         "category": "FACT" | "EVENT" | "CHAT",
         "fact": "extracted fact string" (if FACT),
         "event_description": "short description" (if EVENT),
         "time_offset_minutes": int (if EVENT, default 60 if unspecified)
-    }}
-    """
+    }}"""
     
     reasoning_context = ""
     
     try:
-        response = await client.aio.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                {"role": "user", "parts": [{"text": prompt}]}
-            ],
-            config=types.GenerateContentConfig(
-                response_modalities=["TEXT"],
-                response_mime_type="application/json"  # Enforce JSON output
-            )
-        )
+        response = await client.ainvoke([HumanMessage(content=prompt)])
         
-        # Parse output
-        result_text = response.candidates[0].content.parts[0].text
+        # Parse JSON from response
+        result_text = response.content.strip()
+        # Handle potential markdown code block wrapping
+        if result_text.startswith("```"):
+            result_text = result_text.split("```")[1]
+            if result_text.startswith("json"):
+                result_text = result_text[4:]
+            result_text = result_text.strip()
+        
         data = json.loads(result_text)
         
         category = data.get("category", "CHAT").upper()
@@ -71,7 +70,7 @@ async def reasoning_node(state):
         elif category == "EVENT":
             description = data.get("event_description", "Untitled Event")
             minutes = data.get("time_offset_minutes", 60)
-            event_time = datetime.now() + timedelta(minutes=minutes)
+            event_time = datetime.now(timezone.utc) + timedelta(minutes=minutes)
             
             try:
                 await store_event(username, description, event_time)
@@ -81,8 +80,11 @@ async def reasoning_node(state):
                 logger.error(f"[Reasoning] Failed to store event: {e}")
                 reasoning_context += ". Failed to save event."
 
+    except json.JSONDecodeError as e:
+        logger.error(f"[Reasoning] JSON parse error: {e}")
+        reasoning_context += ". Reasoning failed (invalid JSON)."
     except Exception as e:
-        logger.error(f"[Reasoning] Gemini Error: {e}")
+        logger.error(f"[Reasoning] Mistral Error: {e}")
         reasoning_context += ". Reasoning failed."
 
     # Return partial state update

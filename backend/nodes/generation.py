@@ -1,16 +1,23 @@
-import os
-import google.genai as genai
+import logging
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from langchain_core.messages import HumanMessage
 from utils.memory import retrieve_knowledge, get_upcoming_events
-from config import GEMINI_MODEL
+from config import NVIDIA_API_KEY, NVIDIA_MODEL, NVIDIA_TEMPERATURE, NVIDIA_TOP_P, NVIDIA_MAX_TOKENS
 
-from google.genai import types
+logger = logging.getLogger(__name__)
 
-# Initialize Gemini Client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Initialize Mistral Client via NVIDIA AI Endpoints
+client = ChatNVIDIA(
+    model=NVIDIA_MODEL,
+    api_key=NVIDIA_API_KEY,
+    temperature=NVIDIA_TEMPERATURE,
+    top_p=NVIDIA_TOP_P,
+    max_tokens=NVIDIA_MAX_TOKENS,
+)
 
 async def generation_node(state):
     """
-    Generates the final response using Gemini.
+    Generates the final response using Mistral via NVIDIA.
     Executes after reasoning in sequential flow.
     """
     input_text = state["input_text"]
@@ -19,8 +26,6 @@ async def generation_node(state):
     reasoning_context = state.get("reasoning_context", "")
     
     # 1. Retrieve Fast Context
-    # (Reasoning node might be too slow, so we do a quick lookup here too if needed, 
-    # or rely on what's passed in. For immediate response, we do a quick retrieval).
     knowledge = await retrieve_knowledge(username, input_text)
     events = await get_upcoming_events(username)
     
@@ -34,14 +39,12 @@ async def generation_node(state):
     chat_history_str = "\n".join(chat_history[-5:]) if chat_history else "No previous messages"
 
     # 2. Construct Prompt with Reasoning Context
-    # Include what the reasoning node discovered so we can immediately acknowledge facts/events
     reasoning_section = f"""
     Recent Context (from reasoning):
     {reasoning_context}
     """ if reasoning_context else ""
     
-    system_prompt = f"""
-    You are an AI companion. You are talking to {name}.
+    system_prompt = f"""You are an AI companion. You are talking to {name}.
     
     User Profile:
     - Name: {name}
@@ -56,48 +59,16 @@ async def generation_node(state):
     {chat_history_str}
     {reasoning_section}
     Respond naturally, empathetically, and concisely to the user.
-    If the recent context shows a fact was just stored or an event was scheduled, acknowledge it warmly.
-    """
-    
-    # 3. Generate Content
-    # Using raw genai client for text generation
-    # Explicitly request TEXT to avoid audio/multipart complexity in this node
-    
-    # Prepare contents - if images were in state, we would add them here
-    # For now, we just send text, but the model is ready for images
-    prompt_parts = [{"text": system_prompt + f"\nUser: {input_text}"}]
-    
-    # Future Vision Integration:
-    # if "image_data" in state:
-    #     prompt_parts.append({"inline_data": {"mime_type": "image/jpeg", "data": state["image_data"]}})
+    If the recent context shows a fact was just stored or an event was scheduled, acknowledge it warmly."""
+
+    # 3. Generate Content with Mistral
+    full_prompt = f"{system_prompt}\n\nUser: {input_text}"
 
     try:
-        response = await client.aio.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                {"role": "user", "parts": prompt_parts}
-            ],
-            config=types.GenerateContentConfig(
-                response_modalities=["TEXT"]
-            )
-        )
-        
-        # Manually extract text to avoid warnings about "thought" or "non-data" parts
-        final_text = ""
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                # Check if likely a thought part (using safe getattr in case of SDK version diffs)
-                is_thought = getattr(part, 'thought', False)
-                if is_thought:
-                    continue
-                    
-                # Only append if valid text exists content
-                if part.text:
-                    final_text += part.text
-                    
+        response = await client.ainvoke([HumanMessage(content=full_prompt)])
+        final_text = response.content.strip()
         return {"final_response": final_text}
 
     except Exception as e:
-        import logging
-        logging.error(f"Generation Error: {e}")
+        logger.error(f"Generation Error: {e}")
         return {"final_response": "I'm having trouble generating a response right now."}

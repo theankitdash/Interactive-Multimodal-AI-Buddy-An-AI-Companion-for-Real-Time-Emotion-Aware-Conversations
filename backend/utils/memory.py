@@ -1,16 +1,17 @@
 import json
 import asyncio
+import numpy as np
 from datetime import datetime
 from typing import Dict, List, Optional
 from utils.db_connect import get_pool
-import google.genai as genai
-import os
+from sentence_transformers import SentenceTransformer
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini Client for Embeddings
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Initialize local embedding model (768 dims, matches DB schema)
+_embed_model = SentenceTransformer("all-mpnet-base-v2")
+logger.info("[Memory] Loaded embedding model: all-mpnet-base-v2 (768 dims)")
 
 async def get_user_profile(username: str) -> Optional[Dict[str, str]]:
     """Fetch basic user details."""
@@ -28,44 +29,52 @@ async def get_user_profile(username: str) -> Optional[Dict[str, str]]:
             logger.error(f"Error fetching user profile: {e}")
             return None
 
-async def store_knowledge(username: str, fact: str, category: str = "other") -> None:
-    """Store a fact with Gemini vector embedding (768 dims)."""
+def _get_embedding(text: str) -> np.ndarray:
+    """Generate embedding locally using sentence-transformers."""
+    return _embed_model.encode(text, normalize_embeddings=True).astype(np.float32)
+
+async def store_knowledge(username: str, fact: str, category: str = "other") -> bool:
+    """Store a fact with sentence-transformer vector embedding (768 dims). Returns True on success."""
     try:
-        # Generate embedding using Gemini
-        result = await client.aio.models.embed_content(
-            model="text-embedding-004",
-            contents=fact
-        )
-        embedding_list = result.embeddings[0].values
+        # Generate embedding locally (runs on CPU, fast for short text)
+        logger.info(f"[Memory] Generating embedding for: {fact[:50]}...")
+        embedding_array = await asyncio.to_thread(_get_embedding, fact)
+        logger.info(f"[Memory] Embedding generated: {len(embedding_array)} dims")
         
         pool = await get_pool()
         async with pool.acquire() as conn:
-            # Check if fact exists to avoid duplicates (optional, based on unique constraint)
+            logger.info(f"[Memory] Inserting into DB: username={username}, category={category}")
             await conn.execute(
                 """
                 INSERT INTO user_knowledge (username, fact, category, embedding)
-                VALUES ($1, $2, $3, $4::vector)
+                VALUES ($1, $2, $3::knowledge_category, $4)
                 ON CONFLICT (username, fact) DO UPDATE 
                 SET last_updated = CURRENT_TIMESTAMP
                 """,
-                username, fact, category, embedding_list
+                username, fact, category, embedding_array
             )
-            logger.info(f"Stored knowledge for {username}: {fact[:30]}...")
+            
+            # Verify the row was actually saved
+            row = await conn.fetchrow(
+                "SELECT knowledge_id, fact, category FROM user_knowledge WHERE username = $1 AND fact = $2",
+                username, fact
+            )
+            if row:
+                logger.info(f"[Memory] ✓ VERIFIED in DB: id={row['knowledge_id']}, fact={row['fact'][:30]}")
+            else:
+                logger.error(f"[Memory] ✗ ROW NOT FOUND after insert! username={username}, fact={fact[:30]}")
+            
+            return True
             
     except Exception as e:
-        logger.error(f"Error storing knowledge: {e}")
-        # Don't raise, just log error to allow flow to continue
-        pass
+        logger.error(f"[Memory] Error storing knowledge: {e}", exc_info=True)
+        return False
 
 async def retrieve_knowledge(username: str, query: str, k: int = 5) -> List[Dict[str, str]]:
-    """Semantic search using Gemini embeddings."""
+    """Semantic search using sentence-transformer embeddings."""
     try:
-        # Generate embedding for query
-        result = await client.aio.models.embed_content(
-            model="text-embedding-004",
-            contents=query
-        )
-        query_emb_list = result.embeddings[0].values
+        # Generate embedding locally
+        query_emb_array = await asyncio.to_thread(_get_embedding, query)
         
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -77,7 +86,7 @@ async def retrieve_knowledge(username: str, query: str, k: int = 5) -> List[Dict
                 ORDER BY embedding <=> $2::vector
                 LIMIT $3
                 """,
-                username, query_emb_list, k
+                username, query_emb_array, k
             )
             return [{"fact": r["fact"], "category": r["category"]} for r in rows]
             

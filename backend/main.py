@@ -16,9 +16,11 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up...")
     try:
-        from utils.db_connect import init_pool
+        from utils.db_connect import init_pool, init_db
         await init_pool()
         logger.info("Database pool initialized.")
+        await init_db()
+        logger.info("Database schema initialized.")
     except Exception as e:
         logger.error(f"Database initialization warning: {e}")
     
@@ -33,7 +35,7 @@ async def lifespan(app: FastAPI):
         from utils.db_connect import close_pool
         await close_pool()
     except Exception as e:
-        print(f"Database cleanup warning: {e}")
+        logger.error(f"Database cleanup warning: {e}")
 
 app = FastAPI(title="AI Buddy Backend", version="1.0.0", lifespan=lifespan)
 

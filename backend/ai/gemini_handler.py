@@ -87,15 +87,10 @@ class GeminiHandler:
         """
         Start the Gemini Live session and begin audio streaming.
         
-        NOTE: System instruction is intentionally minimal/None for codec-only mode.
-        Intelligence/personality handled by Cognition Socket (Mistral).
-        
         Args:
-            system_instruction: Optional system prompt (ignored in codec mode)
+            system_instruction: System prompt for Gemini behavior
         """
         try:
-            # CODEC MODE: No system instruction, personality-neutral
-            # All intelligence comes from Cognition Socket (Mistral)
             config = LiveConnectConfig(
                 response_modalities=["AUDIO"],  # Audio-only responses
                 speech_config=SpeechConfig(
@@ -105,6 +100,8 @@ class GeminiHandler:
                         )
                     )
                 ),
+                # Enable input audio transcription so we know what the user said
+                input_audio_transcription=types.AudioTranscriptionConfig(),
                 system_instruction=types.Content(parts=[{"text": system_instruction}]) if system_instruction else None
             )
             
@@ -120,7 +117,6 @@ class GeminiHandler:
                 
                 try:
                     # Use start_stream for bidirectional audio
-                    # The stream() method yields base64-encoded audio strings
                     async for response in session.start_stream(
                         stream=self._audio_input_stream(),
                         mime_type="audio/pcm"
@@ -128,15 +124,12 @@ class GeminiHandler:
                         if self.quit.is_set():
                             break
                         
-                        # Manually extract audio data from parts to avoid SDK warning
-                        # The warning occurs when using response.data with mixed content types
-                        
                         # Check for user input transcription (input_transcription)
-                        # This is what the USER said, not what the model said
                         if hasattr(response, 'server_content') and response.server_content:
-                            # Check for user input transcription
                             if hasattr(response.server_content, 'input_transcription') and response.server_content.input_transcription:
-                                user_text = response.server_content.input_transcription.strip()
+                                transcription = response.server_content.input_transcription
+                                user_text = getattr(transcription, 'text', '') or ''
+                                user_text = user_text.strip()
                                 if user_text:
                                     logger.info(f"[Gemini] User said: {user_text[:100]}")
                                     await self.transcription_queue.put(user_text)
@@ -159,7 +152,6 @@ class GeminiHandler:
                                             logger.error(f"[Gemini] Audio decode error: {e}")
                                 
                                 # Log model's text output but DO NOT put in transcription queue
-                                # The model's response should not trigger re-processing
                                 elif hasattr(part, 'text') and part.text:
                                     text = part.text.strip()
                                     if text:
@@ -168,7 +160,6 @@ class GeminiHandler:
                         # Check for turn completion to reset speaking flag
                         if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
                             self._is_model_speaking = False
-                            # Emit end-of-utterance event for Cognition Socket
                             await self.event_queue.put({
                                 "event": "end_of_utterance",
                                 "timestamp": time.time()
@@ -217,14 +208,12 @@ class GeminiHandler:
         """
         try:
             if not self.session_ready.is_set():
-                # Wait briefly for session to be ready
                 if self.quit.is_set():
                     return
                 await asyncio.sleep(0.1)
                 if not self.session_ready.is_set():
                     return
             
-            # Convert to base64 and queue
             audio_b64 = encode_audio(array)
             await self.input_queue.put(audio_b64)
             
@@ -240,7 +229,6 @@ class GeminiHandler:
             frame: Video frame as numpy array (BGR format)
         """
         try:
-            # Rate limit: 1 frame per second
             current_time = time.time()
             if not self.session or not self.session_ready.is_set():
                 logger.debug("[Gemini] Cannot send video: session not ready")
@@ -251,17 +239,34 @@ class GeminiHandler:
             
             self.last_frame_time = current_time
             
-            # Encode frame
             encoded_frame = encode_image(frame)
             frame_size = len(encoded_frame.get('data', ''))
             logger.info(f"[Gemini] Sending video frame: {frame.shape}, encoded size: {frame_size} bytes")
             
-            # Send to Gemini
             await self.session.send(input=encoded_frame)
             logger.info("[Gemini] ✓ Video frame sent successfully")
             
         except Exception as e:
             logger.error(f"[Gemini] ✗ Send video error: {e}", exc_info=True)
+    
+    async def send_text(self, text: str):
+        """
+        Inject a text message into the live Gemini session.
+        Used for context updates like camera state or vision descriptions.
+        
+        Args:
+            text: Text to inject into the conversation
+        """
+        try:
+            if not self.session or not self.session_ready.is_set():
+                logger.debug("[Gemini] Cannot send text: session not ready")
+                return
+            
+            await self.session.send(input=text, end_of_turn=True)
+            logger.info(f"[Gemini] Injected text: {text[:80]}...")
+            
+        except Exception as e:
+            logger.error(f"[Gemini] Send text error: {e}")
     
     async def get_audio_reply(self):
         """
@@ -283,7 +288,7 @@ class GeminiHandler:
     async def get_transcription(self):
         """
         Get captured transcription text for Mistral reasoning.
-        This captures what Gemini heard or generated as text.
+        This captures what the user said via Gemini's input transcription.
         
         Returns:
             str: Transcription text, or None if queue is empty

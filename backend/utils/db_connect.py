@@ -1,12 +1,13 @@
 import os
 import asyncpg
-from dotenv import load_dotenv
 from pgvector.asyncpg import register_vector
-
-load_dotenv()
 
 # Global connection pool
 _pool = None
+
+async def _init_connection(conn):
+    """Initialize each connection with pgvector type codec."""
+    await register_vector(conn)
 
 async def init_pool():
     """Initialize the connection pool."""
@@ -20,11 +21,9 @@ async def init_pool():
             port=os.getenv("DB_PORT"),
             min_size=5,
             max_size=20,
-            command_timeout=60
+            command_timeout=60,
+            init=_init_connection  # Register pgvector on every connection
         )
-        # Register vector type for the pool
-        async with _pool.acquire() as conn:
-            await register_vector(conn)
 
 async def get_pool():
     """Get the connection pool, creating it if necessary."""
@@ -32,10 +31,7 @@ async def get_pool():
         await init_pool()
     return _pool
 
-async def connect_db():
-    """Get a connection from the pool."""
-    pool = await get_pool()
-    return await pool.acquire()
+
 
 async def close_pool():
     """Close the connection pool."""
