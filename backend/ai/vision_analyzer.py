@@ -1,13 +1,3 @@
-"""
-Vision Analysis Layer
-
-Periodically analyzes camera frames using Gemini Vision API to produce
-structured scene descriptions. Feeds descriptions to both:
-- Gemini Live session (grounded audio responses)
-- Cognition Socket (so Mistral has visual context for reasoning)
-
-When camera is off, explicitly sets description to "Camera is off."
-"""
 import asyncio
 import base64
 import logging
@@ -25,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Initialize Gemini client for vision analysis
 vision_client = genai.Client(api_key=GEMINI_API_KEY)
 
-VISION_ANALYSIS_INTERVAL = 3.0  # Analyze every 3 seconds
+VISION_ANALYSIS_INTERVAL = 3.0  # Analyze every 3 seconds (balances responsiveness vs API cost)
 VISION_MODEL = "gemini-2.5-flash"  # Text+vision model
 
 VISION_PROMPT = """Describe what you see in this image in 1-2 concise sentences. 
@@ -33,12 +23,7 @@ Focus on: the person (appearance, expression, activity), their environment, and 
 Be factual and brief. Do not speculate beyond what is visible."""
 
 
-class VisionAnalyzer:
-    """
-    Analyzes camera frames periodically and provides scene descriptions
-    to both Gemini Live and Cognition Socket.
-    """
-    
+class VisionAnalyzer: 
     def __init__(self):
         self._camera_on = False
         self._latest_frame: np.ndarray | None = None
@@ -57,7 +42,6 @@ class VisionAnalyzer:
         return self._latest_description
     
     def set_camera_state(self, on: bool):
-        """Update camera state. When off, clears frame and sets description."""
         self._camera_on = on
         if not on:
             self._latest_frame = None
@@ -68,19 +52,16 @@ class VisionAnalyzer:
             logger.info("[Vision] Camera turned ON — awaiting frames")
     
     def update_frame(self, frame: np.ndarray):
-        """Update the latest frame for analysis."""
         if self._camera_on:
             self._latest_frame = frame.copy()
     
     def start(self):
-        """Start the periodic analysis loop."""
         if not self._running:
             self._running = True
             self._task = asyncio.create_task(self._analysis_loop())
             logger.info("[Vision] Analysis loop started")
     
     def stop(self):
-        """Stop the analysis loop."""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -88,7 +69,6 @@ class VisionAnalyzer:
         logger.info("[Vision] Analysis loop stopped")
     
     async def _analysis_loop(self):
-        """Periodically analyze the latest frame."""
         while self._running:
             try:
                 await asyncio.sleep(VISION_ANALYSIS_INTERVAL)
@@ -113,7 +93,6 @@ class VisionAnalyzer:
                 await asyncio.sleep(1)  # Back off on error
     
     async def _analyze_frame(self, frame: np.ndarray) -> str | None:
-        """Analyze a single frame using Gemini Vision API."""
         try:
             # Encode frame to JPEG bytes
             pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -158,7 +137,6 @@ class VisionAnalyzer:
             return None
     
     async def analyze_now(self, frame: np.ndarray) -> str:
-        """Analyze a frame immediately (on-demand, outside the loop)."""
         result = await self._analyze_frame(frame)
         if result:
             self._latest_description = result

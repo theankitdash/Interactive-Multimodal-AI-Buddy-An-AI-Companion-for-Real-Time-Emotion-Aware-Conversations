@@ -12,7 +12,6 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for startup/shutdown events."""
     # Startup
     logger.info("Starting up...")
     try:
@@ -23,9 +22,6 @@ async def lifespan(app: FastAPI):
         logger.info("Database schema initialized.")
     except Exception as e:
         logger.error(f"Database initialization warning: {e}")
-    
-    # Initialize session registry
-    # (No explicit init needed for now, but good placeholder)
     
     yield
     

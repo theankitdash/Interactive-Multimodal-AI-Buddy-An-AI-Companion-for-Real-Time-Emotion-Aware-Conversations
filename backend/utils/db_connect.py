@@ -141,6 +141,23 @@ async def init_db():
                 ON user_knowledge(username);
             """)
 
+            # Vector similarity index for fast knowledge retrieval
+            await conn.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_indexes WHERE indexname = 'idx_knowledge_embedding'
+                    ) THEN
+                        -- Only create IVFFlat index when there are enough rows
+                        IF (SELECT count(*) FROM user_knowledge) >= 100 THEN
+                            CREATE INDEX idx_knowledge_embedding
+                            ON user_knowledge USING ivfflat (embedding vector_cosine_ops)
+                            WITH (lists = 100);
+                        END IF;
+                    END IF;
+                END $$ LANGUAGE plpgsql;
+            """)
+
             # TIMESTAMP TRIGGERS
             await conn.execute("""
                 CREATE OR REPLACE FUNCTION set_updated_at()

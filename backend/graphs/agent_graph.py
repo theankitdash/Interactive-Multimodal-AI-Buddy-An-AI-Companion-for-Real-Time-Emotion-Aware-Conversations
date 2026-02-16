@@ -8,6 +8,7 @@ class AgentState(TypedDict):
     username: str
     chat_history: List[str]
     user_profile: Dict[str, Any]
+    vision_context: str  
     reasoning_context: str
     final_response: str
     audio_mode: bool  # If True, skip generation (Gemini Live handles response)

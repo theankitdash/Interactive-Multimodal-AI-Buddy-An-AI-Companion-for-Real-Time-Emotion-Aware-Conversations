@@ -15,9 +15,6 @@ import time
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Store active sessions
-active_sessions = {}
-
 class SessionState:
     """Manage conversation session state"""
     def __init__(self, session_id: str, username: str):
@@ -43,8 +40,8 @@ class SessionState:
     def add_to_history(self, role: str, message: str):
         """Track conversation history for context"""
         self.chat_history.append(f"{role}: {message}")
-        if len(self.chat_history) > 10:
-            self.chat_history = self.chat_history[-10:]
+        if len(self.chat_history) > 20:
+            self.chat_history = self.chat_history[-20:]
     
     async def cleanup(self):
         """Clean up resources"""
@@ -59,13 +56,8 @@ class SessionState:
 
 @router.websocket("/stream")
 async def assistant_stream(websocket: WebSocket):
-    """
-    WebSocket endpoint for real-time AI assistant interaction.
-    Integrates reasoning and generation pipelines.
-    Handles audio/video streaming bidirectionally with context awareness.
-    """
+
     await websocket.accept()
-    
     session_state = None
     
     try:
@@ -99,16 +91,16 @@ async def assistant_stream(websocket: WebSocket):
             "When visual context says 'Camera is off', do NOT describe or guess what you see — "
             "clearly tell the user the camera is off. "
             "When visual context is provided, use it to respond naturally about what you see. "
+            "You may also receive [MEMORY CONTEXT] with the user's stored memories, preferences, and upcoming events. "
+            "Use this context to give personalized, accurate answers when the user asks about their info. "
             "Respond conversationally, empathetically, and concisely."
         )
         gemini_task = asyncio.create_task(session_state.gemini_handler.start(system_instruction=system_instruction))
+        session_state._gemini_task = gemini_task  # Track for cleanup
         
         # Start Vision Analyzer loop
         session_state.vision_analyzer.start()
-        
-        # Store session
-        active_sessions[username] = session_state
-        
+          
         # Register in session registry for inter-socket communication
         await session_registry.register_audio_socket(username, session_state, websocket)
         
@@ -218,7 +210,7 @@ async def assistant_stream(websocket: WebSocket):
                 logger.error(f"[WebSocket Send Error] {e}")
 
         async def forward_transcriptions():
-            """Poll transcription queue and forward to Cognition Socket"""
+
             try:
                 while True:
                     # Get transcription from Gemini
@@ -239,11 +231,10 @@ async def assistant_stream(websocket: WebSocket):
                 logger.error(f"[Audio Socket] Transcription forwarding error: {e}")
 
         async def inject_vision_context():
-            """Periodically inject vision descriptions into Gemini session"""
             last_description = ""
             try:
                 while True:
-                    await asyncio.sleep(4)  # Slightly offset from vision analysis interval
+                    await asyncio.sleep(1)  # Slightly offset from vision analysis interval
                     
                     if session_state.vision_analyzer and session_state.camera_on:
                         description = session_state.vision_analyzer.latest_description
@@ -259,10 +250,11 @@ async def assistant_stream(websocket: WebSocket):
 
         # Run all concurrent tasks
         await asyncio.gather(
+            gemini_task,
             receive_from_client(),
             send_to_client(),
             forward_transcriptions(),
-            inject_vision_context(),  # Vision context injection loop
+            inject_vision_context(),
             return_exceptions=True
         )
     
@@ -280,8 +272,6 @@ async def assistant_stream(websocket: WebSocket):
             try:
                 await session_registry.unregister_audio_socket(session_state.username)
                 await session_state.cleanup()
-                if session_state.session_id in active_sessions:
-                    del active_sessions[session_state.session_id]
                 logger.info(f"[WebSocket] Cleaned up session for {session_state.username}")
             except Exception as e:
                 logger.error(f"Error during cleanup: {e}")
@@ -293,20 +283,12 @@ async def assistant_stream(websocket: WebSocket):
 
 
 async def process_user_text(session_state: SessionState, user_input: str, silent: bool = False):
-    """
-    Process user text through the reasoning and generation pipeline.
-    
-    Args:
-        session_state: Current session state
-        user_input: User's text input
-        silent: If True, only run reasoning (save facts/events) without sending response.
-    """
     try:
         session_state.add_to_history("user", user_input)
         
         # Include vision context so Mistral also knows what's visible
         vision_context = ""
-        if session_state.vision_analyzer:
+        if session_state.vision_analyzer and session_state.camera_on:
             vision_context = session_state.vision_analyzer.latest_description
         
         agent_state = {
@@ -314,6 +296,7 @@ async def process_user_text(session_state: SessionState, user_input: str, silent
             "username": session_state.username,
             "chat_history": session_state.chat_history,
             "user_profile": session_state.user_profile,
+            "vision_context": vision_context,
             "reasoning_context": "",
             "final_response": "",
             "audio_mode": silent  # Skip generation when in audio mode

@@ -30,11 +30,9 @@ async def get_user_profile(username: str) -> Optional[Dict[str, str]]:
             return None
 
 def _get_embedding(text: str) -> np.ndarray:
-    """Generate embedding locally using sentence-transformers."""
     return _embed_model.encode(text, normalize_embeddings=True).astype(np.float32)
 
 async def store_knowledge(username: str, fact: str, category: str = "other") -> bool:
-    """Store a fact with sentence-transformer vector embedding (768 dims). Returns True on success."""
     try:
         # Generate embedding locally (runs on CPU, fast for short text)
         logger.info(f"[Memory] Generating embedding for: {fact[:50]}...")
@@ -71,7 +69,6 @@ async def store_knowledge(username: str, fact: str, category: str = "other") -> 
         return False
 
 async def retrieve_knowledge(username: str, query: str, k: int = 5) -> List[Dict[str, str]]:
-    """Semantic search using sentence-transformer embeddings."""
     try:
         # Generate embedding locally
         query_emb_array = await asyncio.to_thread(_get_embedding, query)
@@ -95,7 +92,6 @@ async def retrieve_knowledge(username: str, query: str, k: int = 5) -> List[Dict
         return []
 
 async def store_event(username: str, description: str, event_time: datetime, event_type: str = "task") -> None:
-    """Create a new event."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:
@@ -111,7 +107,6 @@ async def store_event(username: str, description: str, event_time: datetime, eve
             raise
 
 async def get_upcoming_events(username: str, limit: int = 5) -> List[Dict]:
-    """Get upcoming pending events."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:

@@ -1,9 +1,3 @@
-"""
-Gemini Live Audio Handler
-
-Handles real-time audio/video streaming with Gemini's Live API.
-Based on the fastrtc reference pattern for bidirectional streaming.
-"""
 import cv2
 import time
 import base64
@@ -50,14 +44,6 @@ def encode_image(frame: np.ndarray) -> dict:
 
 
 class GeminiHandler:
-    """
-    Handler for Gemini Live API with bidirectional audio streaming.
-    
-    Follows the pattern from fastrtc reference implementation:
-    - Audio input via async generator (base64 encoded strings)
-    - Audio output as numpy arrays at 24kHz
-    """
-    
     def __init__(self, api_key: str, voice_name: str = "Puck"):
         self.api_key = api_key
         self.voice_name = voice_name
@@ -84,12 +70,6 @@ class GeminiHandler:
         )
     
     async def start(self, system_instruction: str = None):
-        """
-        Start the Gemini Live session and begin audio streaming.
-        
-        Args:
-            system_instruction: System prompt for Gemini behavior
-        """
         try:
             config = LiveConnectConfig(
                 response_modalities=["AUDIO"],  # Audio-only responses
@@ -177,10 +157,6 @@ class GeminiHandler:
             self.session_ready.clear()
     
     async def _audio_input_stream(self):
-        """
-        Async generator that yields base64-encoded audio chunks.
-        This is consumed by Gemini's start_stream method.
-        """
         while not self.quit.is_set():
             try:
                 # Wait for audio chunk with timeout
@@ -200,12 +176,6 @@ class GeminiHandler:
                 logger.error(f"[Gemini] Input stream error: {e}")
     
     async def send_audio(self, array: np.ndarray):
-        """
-        Queue audio data for sending to Gemini.
-        
-        Args:
-            array: Audio data as numpy array (int16)
-        """
         try:
             if not self.session_ready.is_set():
                 if self.quit.is_set():
@@ -221,13 +191,6 @@ class GeminiHandler:
             logger.error(f"[Gemini] Send audio error: {e}")
     
     async def send_video(self, frame: np.ndarray):
-        """
-        Send a video frame to Gemini for visual context.
-        Rate-limited to avoid overwhelming the API.
-        
-        Args:
-            frame: Video frame as numpy array (BGR format)
-        """
         try:
             current_time = time.time()
             if not self.session or not self.session_ready.is_set():
@@ -250,31 +213,18 @@ class GeminiHandler:
             logger.error(f"[Gemini] ✗ Send video error: {e}", exc_info=True)
     
     async def send_text(self, text: str):
-        """
-        Inject a text message into the live Gemini session.
-        Used for context updates like camera state or vision descriptions.
-        
-        Args:
-            text: Text to inject into the conversation
-        """
         try:
             if not self.session or not self.session_ready.is_set():
                 logger.debug("[Gemini] Cannot send text: session not ready")
                 return
             
-            await self.session.send(input=text, end_of_turn=True)
+            await self.session.send(input=text, end_of_turn=False)
             logger.info(f"[Gemini] Injected text: {text[:80]}...")
             
         except Exception as e:
             logger.error(f"[Gemini] Send text error: {e}")
     
     async def get_audio_reply(self):
-        """
-        Get an audio reply from Gemini if available.
-        
-        Returns:
-            Tuple of (sample_rate, audio_array) or None
-        """
         try:
             if self.output_queue.empty():
                 return None
@@ -286,13 +236,6 @@ class GeminiHandler:
             return None
     
     async def get_transcription(self):
-        """
-        Get captured transcription text for Mistral reasoning.
-        This captures what the user said via Gemini's input transcription.
-        
-        Returns:
-            str: Transcription text, or None if queue is empty
-        """
         try:
             if self.transcription_queue.empty():
                 return None
@@ -304,7 +247,6 @@ class GeminiHandler:
             return None
     
     async def stop(self):
-        """Stop the Gemini session and clean up resources."""
         try:
             logger.info("[Gemini] Stopping session...")
             self.quit.set()

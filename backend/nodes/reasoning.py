@@ -1,45 +1,54 @@
 import logging
 import json
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_core.messages import HumanMessage
+from ai.nvidia_client import mistral_client as client
 from utils.memory import store_knowledge, store_event
 from datetime import datetime, timedelta, timezone
-from config import NVIDIA_API_KEY, NVIDIA_MODEL, NVIDIA_TEMPERATURE, NVIDIA_TOP_P, NVIDIA_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
-# Initialize Mistral Client via NVIDIA AI Endpoints
-client = ChatNVIDIA(
-    model=NVIDIA_MODEL,
-    api_key=NVIDIA_API_KEY,
-    temperature=NVIDIA_TEMPERATURE,
-    top_p=NVIDIA_TOP_P,
-    max_tokens=NVIDIA_MAX_TOKENS,
-)
-
 async def reasoning_node(state):
-    """
-    Analyzes input text for facts or events using Mistral.
-    Executes before generation in sequential flow.
-    """
     input_text = state["input_text"]
     username = state["username"]
+    chat_history = state.get("chat_history", [])
+    user_profile = state.get("user_profile", {})
+    vision_context = state.get("vision_context", "")
     
-    # 1. Classify Intent & Extract Info (Single Step for Speed)
-    prompt = f"""Analyze the following user input: "{input_text}"
+    # Build context sections
+    name = user_profile.get("name", username)
     
-    Task:
-    1. Classify intent into ONE category: FACT, EVENT, CHAT.
-    2. IF FACT: Extract the core fact (e.g., "I like pizza" -> "User likes pizza").
-    3. IF EVENT: Extract description and estimated time offset in minutes from now.
+    history_str = ""
+    if chat_history:
+        recent = chat_history[-8:]  # Last 8 turns for context
+        history_str = f"\n\nRecent conversation:\n" + "\n".join(recent)
     
-    Return JSON ONLY, no extra text:
-    {{
-        "category": "FACT" | "EVENT" | "CHAT",
-        "fact": "extracted fact string" (if FACT),
-        "event_description": "short description" (if EVENT),
-        "time_offset_minutes": int (if EVENT, default 60 if unspecified)
-    }}"""
+    vision_section = ""
+    if vision_context and vision_context != "Camera is off. No visual data available.":
+        vision_section = f"\nVisual context: {vision_context}"
+    
+    prompt = f"""You are analyzing a live conversation with {name}.{history_str}{vision_section}
+
+Latest message from {name}: "{input_text}"
+
+Your job: classify this message and extract structured data.
+
+RULES:
+- CHAT → The user is asking a question, making a request, greeting, or just chatting. This is the DEFAULT. When in doubt, use CHAT.
+- FACT → The user explicitly shares personal information about themselves. Must be a declarative statement, NOT a question.
+  Subtypes: "preference" (likes, dislikes, favorites, personal details like age/job) or "memory" (past experiences, stories, things that happened to them).
+  Examples: "I love hiking" → preference. "I visited Japan last year" → memory. "My name is Alex" → preference.
+- EVENT → The user wants to SCHEDULE something in the FUTURE. Must include a time reference.
+  Examples: "Remind me to call mom in 30 minutes". "I have a dentist appointment tomorrow at 4pm".
+  Sharing past events is NOT this category — that's FACT/memory.
+
+Return ONLY valid JSON:
+{{
+    "category": "CHAT" | "FACT" | "EVENT",
+    "fact": "concise extracted fact" (only if FACT),
+    "fact_type": "preference" | "memory" (only if FACT),
+    "event_description": "short description" (only if EVENT),
+    "time_offset_minutes": number (only if EVENT, default 60)
+}}"""
     
     reasoning_context = ""
     
@@ -63,9 +72,12 @@ async def reasoning_node(state):
         if category == "FACT":
             fact = data.get("fact")
             if fact:
-                await store_knowledge(username, fact, category="preference")
-                reasoning_context += f". Stored fact: {fact}"
-                logger.info(f"[Reasoning] ✓ Fact stored: {fact}")
+                fact_type = data.get("fact_type", "other")
+                # Map fact_type to knowledge_category enum
+                cat = fact_type if fact_type in ("preference", "memory") else "other"
+                await store_knowledge(username, fact, category=cat)
+                reasoning_context += f". Stored {cat}: {fact}"
+                logger.info(f"[Reasoning] ✓ {cat.title()} stored: {fact}")
                 
         elif category == "EVENT":
             description = data.get("event_description", "Untitled Event")
@@ -89,3 +101,4 @@ async def reasoning_node(state):
 
     # Return partial state update
     return {"reasoning_context": reasoning_context}
+

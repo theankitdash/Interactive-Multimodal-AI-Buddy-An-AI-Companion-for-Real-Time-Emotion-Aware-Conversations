@@ -5,11 +5,11 @@ from typing import Optional, List
 class RegisterRequest(BaseModel):
     username: str
     fullname: str
-    face_embeddings: List[List[float]]  # Required list of face embeddings for authentication
+    face_embeddings: List[List[float]]  
 
 
 class LoginRequest(BaseModel):
-    face_embeddings: List[List[float]]  # List of face embeddings for matching
+    face_embeddings: List[List[float]]
 
 
 class UserResponse(BaseModel):
@@ -19,7 +19,7 @@ class UserResponse(BaseModel):
 
 
 class FaceCaptureRequest(BaseModel):
-    image_data: str  # Base64 encoded image
+    image_data: str 
 
 
 class FaceCaptureResponse(BaseModel):
@@ -31,9 +31,9 @@ class FaceCaptureResponse(BaseModel):
 class MultiSampleRegisterRequest(BaseModel):
     username: str
     fullname: str
-    sample_images: List[str]  # Base64 encoded images (up to 50)
+    sample_images: List[str]  
 
 
 class StreamMessage(BaseModel):
-    type: str  # "audio", "video", "text"
-    data: str  # Base64 or text content
+    type: str  
+    data: str  

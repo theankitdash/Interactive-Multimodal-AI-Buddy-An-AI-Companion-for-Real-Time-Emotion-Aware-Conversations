@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import { AppContextType, AppMode, AIState, User } from '../types';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);

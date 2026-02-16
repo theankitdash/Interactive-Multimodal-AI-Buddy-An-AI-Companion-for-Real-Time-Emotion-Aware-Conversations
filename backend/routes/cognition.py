@@ -1,16 +1,6 @@
-"""
-Cognition Socket - Event-based reasoning and memory management
-
-This WebSocket endpoint handles all intelligence, memory, and decision-making.
-Gemini Reasoning controls the conversation flow; Gemini (Audio Socket) is just voice I/O.
-
-Architecture:
-- Audio Socket: mic → Gemini → speaker (codec only)
-- Cognition Socket: events → Gemini Reasoning → memory/decisions (brain)
-"""
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from graphs.agent_graph import app as agent_graph
-from utils.memory import get_user_profile
+from utils.memory import get_user_profile, retrieve_knowledge, get_upcoming_events
 from session_registry import session_registry
 import asyncio
 import json
@@ -20,12 +10,7 @@ import time
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Store active cognition sessions
-cognition_sessions = {}
-
-
 class CognitionState:
-    """Manage cognition session state for Mistral reasoning"""
     def __init__(self, session_id: str, username: str):
         self.session_id = session_id
         self.username = username
@@ -40,7 +25,6 @@ class CognitionState:
         self._debounce_delay = 1.5  # seconds to wait for more fragments
         
     async def initialize_user_context(self):
-        """Load user profile and context"""
         try:
             profile = await get_user_profile(self.username)
             self.user_profile = profile or {"name": self.username}
@@ -50,7 +34,6 @@ class CognitionState:
             self.user_profile = {"name": self.username}
     
     def add_to_history(self, role: str, message: str):
-        """Track conversation history for context"""
         self.chat_history.append(f"{role}: {message}")
         # Keep only last 20 messages for context
         if len(self.chat_history) > 20:
@@ -59,22 +42,7 @@ class CognitionState:
 
 @router.websocket("/stream")
 async def cognition_stream(websocket: WebSocket):
-    """
-    Cognition WebSocket endpoint for event-based reasoning.
-    
-    Handles:
-    - End-of-utterance events from Audio Socket
-    - Memory storage/retrieval
-    - Emotion detection
-    - Intent classification
-    - Decision making
-    
-    Does NOT handle:
-    - Audio generation (delegated to Audio Socket)
-    - Direct user speech (received via events only)
-    """
     await websocket.accept()
-    
     session_state = None
     
     try:
@@ -95,10 +63,7 @@ async def cognition_stream(websocket: WebSocket):
         # Load user context (profile, preferences, etc.)
         await session_state.initialize_user_context()
         
-        # Store session
-        cognition_sessions[username] = session_state
-        
-        # Register in session registry for inter-socket communication
+        # Store and register session
         await session_registry.register_cognition_socket(username, session_state, websocket)
         
         logger.info(f"[Cognition] User {username} connected. Profile: {session_state.user_profile}")
@@ -156,9 +121,6 @@ async def cognition_stream(websocket: WebSocket):
         if session_state:
             # Unregister from session registry
             await session_registry.unregister_cognition_socket(session_state.username)
-            
-            if session_state.session_id in cognition_sessions:
-                del cognition_sessions[session_state.session_id]
             logger.info(f"[Cognition] Cleaned up session for {session_state.username}")
         
         try:
@@ -168,10 +130,6 @@ async def cognition_stream(websocket: WebSocket):
 
 
 async def process_utterance(session_state: CognitionState, event_data: dict):
-    """
-    Process end-of-utterance event.
-    Triggered when Audio Socket detects user finished speaking.
-    """
     async with session_state.processing_lock:
         try:
             # Debounce: prevent processing too frequently
@@ -198,11 +156,6 @@ async def process_utterance(session_state: CognitionState, event_data: dict):
 
 
 async def process_transcription(session_state: CognitionState, transcription: str, event_data: dict):
-    """
-    Buffer transcription fragments and process once the user stops speaking.
-    Gemini sends partial transcriptions ('Do', 'you', 'know the time...'),
-    so we accumulate them with a 1.5s debounce before triggering Mistral.
-    """
     # Add fragment to buffer
     session_state._transcription_buffer.append(transcription)
     logger.debug(f"[Cognition] Buffered fragment: '{transcription}' (buffer size: {len(session_state._transcription_buffer)})")
@@ -218,7 +171,6 @@ async def process_transcription(session_state: CognitionState, transcription: st
 
 
 async def _flush_transcription_buffer(session_state: CognitionState, event_data: dict):
-    """Wait for debounce delay, then process the accumulated transcription."""
     try:
         await asyncio.sleep(session_state._debounce_delay)
     except asyncio.CancelledError:
@@ -243,6 +195,7 @@ async def _flush_transcription_buffer(session_state: CognitionState, event_data:
             "username": session_state.username,
             "chat_history": session_state.chat_history,
             "user_profile": session_state.user_profile,
+            "vision_context": "",
             "reasoning_context": "",
             "final_response": "",
             "audio_mode": True  # Always true - Gemini handles voice response
@@ -252,6 +205,28 @@ async def _flush_transcription_buffer(session_state: CognitionState, event_data:
         result = await agent_graph.ainvoke(agent_state)
         
         reasoning_context = result.get("reasoning_context", "")
+        
+        # Retrieve relevant memories and events from DB
+        memories = await retrieve_knowledge(session_state.username, full_text, k=5)
+        events = await get_upcoming_events(session_state.username)
+        
+        # Build context string to inject into Gemini
+        context_parts = []
+        if reasoning_context:
+            context_parts.append(f"Reasoning: {reasoning_context}")
+        if memories:
+            mem_str = "; ".join([m["fact"] for m in memories])
+            context_parts.append(f"User memories: {mem_str}")
+        if events:
+            evt_str = "; ".join([f"{e['description']} at {e['event_time']}" for e in events])
+            context_parts.append(f"Upcoming events: {evt_str}")
+        
+        # Inject into Gemini so it can use this knowledge when responding
+        if context_parts:
+            gemini_context = "[MEMORY CONTEXT] " + ". ".join(context_parts)
+            await session_registry.inject_context_to_gemini(
+                session_state.username, gemini_context
+            )
         
         # Send reasoning results to frontend
         if session_state.websocket:
@@ -291,7 +266,6 @@ async def process_emotion(session_state: CognitionState, event_data: dict):
 
 
 async def process_user_action(session_state: CognitionState, event_data: dict):
-    """Process explicit user actions (button clicks, settings changes, etc.)"""
     try:
         action = event_data.get("action", "")
         logger.info(f"[Cognition] User action: {action}")

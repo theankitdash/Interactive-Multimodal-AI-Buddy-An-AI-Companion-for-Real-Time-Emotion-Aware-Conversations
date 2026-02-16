@@ -1,29 +1,16 @@
 import logging
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_core.messages import HumanMessage
+from ai.nvidia_client import mistral_client as client
 from utils.memory import retrieve_knowledge, get_upcoming_events
-from config import NVIDIA_API_KEY, NVIDIA_MODEL, NVIDIA_TEMPERATURE, NVIDIA_TOP_P, NVIDIA_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
-# Initialize Mistral Client via NVIDIA AI Endpoints
-client = ChatNVIDIA(
-    model=NVIDIA_MODEL,
-    api_key=NVIDIA_API_KEY,
-    temperature=NVIDIA_TEMPERATURE,
-    top_p=NVIDIA_TOP_P,
-    max_tokens=NVIDIA_MAX_TOKENS,
-)
-
 async def generation_node(state):
-    """
-    Generates the final response using Mistral via NVIDIA.
-    Executes after reasoning in sequential flow.
-    """
     input_text = state["input_text"]
     username = state["username"]
     chat_history = state.get("chat_history", [])
     reasoning_context = state.get("reasoning_context", "")
+    vision_context = state.get("vision_context", "")
     
     # 1. Retrieve Fast Context
     knowledge = await retrieve_knowledge(username, input_text)
@@ -44,6 +31,11 @@ async def generation_node(state):
     {reasoning_context}
     """ if reasoning_context else ""
     
+    vision_section = f"""
+    Visual Context (what the camera currently sees):
+    {vision_context}
+    """ if vision_context and vision_context != "Camera is off. No visual data available." else ""
+    
     system_prompt = f"""You are an AI companion. You are talking to {name}.
     
     User Profile:
@@ -57,7 +49,7 @@ async def generation_node(state):
     
     Chat History:
     {chat_history_str}
-    {reasoning_section}
+    {reasoning_section}{vision_section}
     Respond naturally, empathetically, and concisely to the user.
     If the recent context shows a fact was just stored or an event was scheduled, acknowledge it warmly."""
 
@@ -72,3 +64,4 @@ async def generation_node(state):
     except Exception as e:
         logger.error(f"Generation Error: {e}")
         return {"final_response": "I'm having trouble generating a response right now."}
+
