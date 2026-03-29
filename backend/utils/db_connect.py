@@ -199,5 +199,31 @@ async def init_db():
                     END IF;
                 END $$ LANGUAGE plpgsql;
             """)
+
+            # Feedback logs for continuous RL improvement (DPO training data)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS feedback_logs (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    response TEXT NOT NULL,
+                    node_type TEXT NOT NULL,
+                    intent_parse_success BOOLEAN DEFAULT true,
+                    response_quality_signal TEXT DEFAULT 'neutral',
+                    metadata JSONB DEFAULT '{}',
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_feedback_logs_username
+                ON feedback_logs(username);
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_feedback_logs_quality
+                ON feedback_logs(response_quality_signal);
+            """)
+
         except Exception as e:
             raise e

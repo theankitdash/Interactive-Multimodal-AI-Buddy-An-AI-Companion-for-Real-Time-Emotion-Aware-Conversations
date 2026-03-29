@@ -20,7 +20,8 @@ This is a **desktop application** built with modern web technologies (Electron +
 - **Facial Recognition Authentication**: Secure hands-free login using face embeddings (FaceNet, multi-sample registration)
 - **Real-Time Voice Conversation**: Bidirectional audio streaming via Gemini Live API (native audio)
 - **Vision Understanding**: Periodic scene analysis using Gemini 2.5 Flash — Deva sees and understands your environment
-- **Intelligent Reasoning**: Intent classification (Chat / Fact / Event) via NVIDIA Mistral 7B through LangGraph
+- **Intelligent Reasoning**: Intent classification (Chat / Fact / Event) via locally fine-tuned Mistral 7B (LoRA + DPO) through LangGraph
+- **Continuous RL Improvement**: Automatic feedback collection from interactions, periodic DPO training for model improvement
 - **Long-Term Memory**: Stores preferences, memories, and events using PostgreSQL + pgvector with semantic vector search
 - **Context Injection**: Retrieves stored knowledge and upcoming events, injecting them into Gemini's live audio context
 - **Emotional Intelligence**: Detects emotions from facial expressions and adapts conversational tone
@@ -64,7 +65,7 @@ The system uses a **dual-WebSocket architecture** bridged by a `SessionRegistry`
 │              ┌──────────▼──────────┐    ┌──────────▼──────────┐   │
 │              │ Gemini Live API     │    │ LangGraph Pipeline   │   │
 │              │ (Audio Streaming)   │    │ Reasoning → Generation│  │
-│              │ + VisionAnalyzer    │    │ (NVIDIA Mistral 7B)  │   │
+│              │ + VisionAnalyzer    │    │ (Local Mistral 7B)   │   │
 │              └─────────────────────┘    └──────────┬──────────┘   │
 │                                                    │              │
 │                                         ┌──────────▼──────────┐   │
@@ -77,7 +78,7 @@ The system uses a **dual-WebSocket architecture** bridged by a `SessionRegistry`
 **Data Flow:**
 1. User speaks → Audio Socket streams to **Gemini Live API** → Audio response streamed back
 2. Gemini transcribes user speech → forwarded to **Cognition Socket** via `SessionRegistry`
-3. Cognition runs **LangGraph** pipeline: **Reasoning** (Mistral classifies intent, extracts facts/events) → **Generation** (retrieves memories, builds context)
+3. Cognition runs **LangGraph** pipeline: **Reasoning** (local Mistral 7B classifies intent, extracts facts/events) → **Generation** (retrieves memories, builds context)
 4. Generated context is **injected back** into Gemini's live session for personalized responses
 5. **VisionAnalyzer** periodically analyzes camera frames via Gemini 2.5 Flash and injects scene descriptions
 
@@ -101,7 +102,8 @@ The system uses a **dual-WebSocket architecture** bridged by a `SessionRegistry`
 | API Framework | FastAPI (Async, WebSocket) |
 | Voice AI | Google Gemini 2.5 Flash (Native Audio Live API) |
 | Vision AI | Google Gemini 2.5 Flash (Scene analysis) |
-| Reasoning & Generation | NVIDIA Mistral 7B (`mistralai/mistral-7b-instruct-v0.3` via LangChain) |
+| Reasoning & Generation | Local Mistral 7B (`mistralai/Mistral-7B-Instruct-v0.3`, 4-bit quantized via bitsandbytes + PEFT/LoRA) |
+| Continuous RL | DPO (Direct Preference Optimization) via TRL, with automatic feedback collection |
 | Agent Orchestrator | LangGraph (Conditional Reasoning → Generation flow) |
 | Embeddings | Sentence Transformers (`all-mpnet-base-v2`, 768 dims) |
 | Face Auth | OpenCV + FaceNet-PyTorch (512-dim embeddings) |
@@ -116,6 +118,7 @@ The system uses a **dual-WebSocket architecture** bridged by a `SessionRegistry`
 - **Node.js** 22+ and **npm**
 - **Python** 3.12+
 - **PostgreSQL** 13+ (with `vector` extension)
+- **NVIDIA GPU** with ≥ 8 GB VRAM (for local Mistral 7B inference)
 - Webcam and microphone
 - Windows/Linux/macOS
 
@@ -160,7 +163,9 @@ The system uses a **dual-WebSocket architecture** bridged by a `SessionRegistry`
    Create a `.env` file in the `backend/` directory:
    ```env
    GEMINI_API_KEY=your_gemini_key
-   NVIDIA_API_KEY=your_nvidia_key
+
+   # Local Mistral 7B (auto-downloads from HuggingFace on first run)
+   LOCAL_MODEL_PATH=mistralai/Mistral-7B-Instruct-v0.3
 
    # Database
    DB_USER=postgres
@@ -169,6 +174,7 @@ The system uses a **dual-WebSocket architecture** bridged by a `SessionRegistry`
    DB_HOST=localhost
    DB_PORT=5432
    ```
+   > **Note:** First startup downloads ~4 GB model from HuggingFace Hub (cached at `~/.cache/huggingface/`). Subsequent starts load from cache (~30s).
 
 6. **Run the application**:
 
@@ -198,8 +204,8 @@ The system uses a **dual-WebSocket architecture** bridged by a `SessionRegistry`
    
 3. **Chat with Deva**: 
    - Speak naturally! Deva listens and responds with voice in real-time.
-   - She sees you through the camera to understand visual context.
-   - She remembers your preferences, past conversations, and scheduled events.
+   - He sees you through the camera to understand visual context.
+   - He remembers your preferences, past conversations, and scheduled events.
    
 4. **Controls**:
    - **Mute/Unmute**: Toggle microphone privacy.
@@ -215,13 +221,13 @@ Interactive-Multimodal-AI-Buddy/
 ├── backend/                     # Python FastAPI backend
 │   ├── ai/                     # AI model clients
 │   │   ├── gemini_handler.py   # Gemini Live API (bidirectional audio streaming)
-│   │   ├── nvidia_client.py    # Shared NVIDIA Mistral client (reasoning + generation)
+│   │   ├── local_mistral.py    # Local Mistral 7B client (4-bit quantized, LangChain-compatible)
 │   │   └── vision_analyzer.py  # Real-time scene analysis (Gemini 2.5 Flash vision)
 │   ├── graphs/                 # LangGraph workflows
 │   │   └── agent_graph.py      # Conditional Reasoning → Generation pipeline
 │   ├── nodes/                  # Graph nodes
-│   │   ├── reasoning.py        # Intent classification + fact/event extraction (Mistral)
-│   │   └── generation.py       # Context-enriched response generation (Mistral)
+│   │   ├── reasoning.py        # Intent classification + fact/event extraction (Local Mistral)
+│   │   └── generation.py       # Context-enriched response generation (Local Mistral)
 │   ├── routes/                 # API endpoints
 │   │   ├── auth.py             # Face registration & recognition (REST)
 │   │   ├── assistant.py        # Audio WebSocket (Gemini Live streaming)
@@ -230,8 +236,15 @@ Interactive-Multimodal-AI-Buddy/
 │   ├── utils/                  # Shared utilities
 │   │   ├── db_connect.py       # PostgreSQL pool + auto schema initialization
 │   │   ├── face_utils.py       # FaceNet embedding extraction
+│   │   ├── feedback_collector.py # Interaction logging for continuous RL (DPO training data)
 │   │   └── memory.py           # Vector knowledge store + semantic retrieval
-│   ├── config.py               # Centralized configuration (API keys, model params)
+│   ├── training/               # Continuous RL improvement pipeline
+│   │   ├── config/dpo_config.yaml  # LoRA + DPO hyperparameters
+│   │   ├── export_feedback.py  # Export feedback_logs → DPO preference pairs
+│   │   ├── train_dpo.py        # DPO fine-tuning with LoRA adapters
+│   │   ├── merge_and_deploy.py # Merge LoRA weights → production model
+│   │   └── evaluate.py         # Benchmark intent accuracy & response quality
+│   ├── config.py               # Centralized configuration (model paths, params)
 │   ├── models.py               # Pydantic request/response models
 │   ├── session_registry.py     # Dual-socket session bridge (Audio ↔ Cognition)
 │   ├── main.py                 # App entry point & lifespan manager
@@ -269,6 +282,7 @@ The backend auto-creates the following schema on startup:
 | `user_details` | User profiles | `username`, `name`, `face_embedding` (vector 512) |
 | `user_knowledge` | Long-term memory (facts) | `fact`, `category` (preference/memory/skill/habit), `embedding` (vector 768) |
 | `events` | Scheduled events & reminders | `description`, `event_time`, `type`, `status`, `priority` |
+| `feedback_logs` | RL training data (DPO) | `prompt`, `response`, `node_type`, `intent_parse_success`, `response_quality_signal` |
 
 Custom enum types: `knowledge_category`, `event_type`, `event_status`
 

@@ -1,8 +1,9 @@
 import logging
 import json
 from langchain_core.messages import HumanMessage
-from ai.nvidia_client import mistral_client as client
+from ai.local_mistral import mistral_client as client
 from utils.memory import store_knowledge, store_event
+from utils.feedback_collector import feedback_collector
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,14 @@ Return ONLY valid JSON:
         category = data.get("category", "CHAT").upper()
         reasoning_context = f"Intent detected: {category}"
         
+        # Log successful parse as positive feedback
+        await feedback_collector.log_interaction(
+            username=username, prompt=prompt, response=result_text,
+            node_type="reasoning", intent_parse_success=True,
+            quality_signal="positive",
+            metadata={"category": category},
+        )
+        
         if category == "FACT":
             fact = data.get("fact")
             if fact:
@@ -95,6 +104,12 @@ Return ONLY valid JSON:
     except json.JSONDecodeError as e:
         logger.error(f"[Reasoning] JSON parse error: {e}")
         reasoning_context += ". Reasoning failed (invalid JSON)."
+        # Log parse failure as negative feedback for DPO
+        await feedback_collector.log_implicit_negative(
+            username=username, prompt=prompt,
+            response=result_text if 'result_text' in dir() else str(e),
+            node_type="reasoning", reason="json_parse_failure",
+        )
     except Exception as e:
         logger.error(f"[Reasoning] Mistral Error: {e}")
         reasoning_context += ". Reasoning failed."

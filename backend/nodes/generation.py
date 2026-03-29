@@ -1,7 +1,8 @@
 import logging
 from langchain_core.messages import HumanMessage
-from ai.nvidia_client import mistral_client as client
+from ai.local_mistral import mistral_client as client
 from utils.memory import retrieve_knowledge, get_upcoming_events
+from utils.feedback_collector import feedback_collector
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,13 @@ async def generation_node(state):
     try:
         response = await client.ainvoke([HumanMessage(content=full_prompt)])
         final_text = response.content.strip()
+        
+        # Log generation for future DPO training
+        await feedback_collector.log_interaction(
+            username=username, prompt=full_prompt, response=final_text,
+            node_type="generation", quality_signal="neutral",
+        )
+        
         return {"final_response": final_text}
 
     except Exception as e:

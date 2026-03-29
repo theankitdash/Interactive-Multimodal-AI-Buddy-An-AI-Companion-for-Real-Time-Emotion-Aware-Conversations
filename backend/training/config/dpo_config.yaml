@@ -1,0 +1,40 @@
+# Base model (HuggingFace hub ID or local path)
+base_model: "mistralai/Mistral-7B-Instruct-v0.3"
+
+# Output directories
+adapter_output: "./checkpoints/dpo-adapter"
+merged_output: "./models/mistral-7b-improved"
+
+# LoRA hyperparameters
+lora:
+  r: 16                        # Rank — 16 is a good balance for 7B models
+  lora_alpha: 32               # Scaling factor (typically 2x rank)
+  lora_dropout: 0.05
+  target_modules:              # Apply LoRA to all linear layers
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  task_type: "CAUSAL_LM"
+
+# 4-bit quantization for memory efficiency during training
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+# DPO Training (run when 500+ feedback interactions accumulated)
+dpo:
+  beta: 0.1                    # KL penalty coefficient
+  num_epochs: 1
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  learning_rate: 5.0e-5
+  lr_scheduler: "cosine"
+  warmup_ratio: 0.03
+  max_seq_length: 1024
+  fp16: true

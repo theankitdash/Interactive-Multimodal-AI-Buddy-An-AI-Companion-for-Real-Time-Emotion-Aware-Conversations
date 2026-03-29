@@ -86,3 +86,8 @@ $RECYCLE.BIN/
 *.tmp
 *.temp
 .Trash-*
+
+# Model checkpoints & training data (too large for git)
+backend/models/
+backend/training/checkpoints/
+backend/training/data/*.jsonl
